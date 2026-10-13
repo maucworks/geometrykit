@@ -2,17 +2,12 @@
 
 geometrykit is deliberately IFC-free (see ``plans/geometrykit/PLAN-occ-exit.md``
 §3: IFC serialisation stays in ifckit). A host application that wants the
-legacy ``to_ifc_*`` serialisation methods on geometry objects installs a
-bridge object exposing the small helper surface ``ifckit.geometry.ifc_geom``
-provides today:
-
-- ``pt3(ifc_file, x, y, z)`` → an ``IfcCartesianPoint`` helper
-
-ifckit installs its bridge when its geometry facade is imported
-(``install_ifc_bridge``). Everything works without the bridge as long as no
-``to_ifc_*`` method is called; calling one without a bridge raises a
-``RuntimeError`` with instructions instead of an ``ImportError`` mid-import
-(often swallowed and re-raised confusingly).
+legacy ``to_ifc_*`` serialisation methods on geometry objects installs the
+ifckit IFC helper module as a bridge — the object must expose the helpers
+``geometrykit`` callers use today: ``pt3`` (cartesian point) and
+``directrix_from_path``/``directrix_from_line``/``directrix_from_arc``
+(composite-curve directrix builders), matching the surface of
+``ifckit.geometry.ifc_geom``.
 """
 
 from __future__ import annotations

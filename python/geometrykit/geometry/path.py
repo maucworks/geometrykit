@@ -1720,9 +1720,9 @@ class Path:
         Returns:
             IfcCompositeCurve entity
         """
-        from geometrykit.geometry.ifc_geom import directrix_from_path as _directrix
+        from geometrykit.geometry._bridge import require_bridge
 
-        return _directrix(ifc_file, self)
+        return require_bridge().directrix_from_path(ifc_file, self)
 
     def offset(self, dist: float, cap: bool = False) -> "Path":
         """Return a new offset Path at distance *dist*, preserving arc segments.

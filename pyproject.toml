@@ -8,14 +8,13 @@ version = "0.1.0"
 description = "Geometry primitives and NURBS data model — the geometry substrate for the ifckit family"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "LGPL-3.0-or-later" }
+license = "LGPL-3.0-or-later"
 license-files = ["COPYING.LESSER", "COPYING"]
 authors = [{ name = "Sander Boer" }]
 keywords = ["geometry", "nurbs", "vector", "curve", "surface", "splines"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
