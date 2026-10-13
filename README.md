@@ -50,9 +50,8 @@ Layers: `tests/geometry/` (ported ifckit geometry suite), `tests/test_contract.p
 ## Licensing
 
 geometrykit is LGPL-3.0-or-later, aligned with ifckit. The kernel carries code
-promoted from ifckit's geometry package (see `plans/geometrykit/PLAN-occ-exit.md`
-in the admin repo) — the single-author relicense decision and the provenance
-of every carried module are documented in that repo's licensing rules.
+promoted from ifckit's geometry package; the provenance of every carried
+module is documented in its file header.
 
 ## Sibling projects
 

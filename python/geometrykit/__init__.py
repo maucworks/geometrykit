@@ -2,8 +2,7 @@
 """geometrykit — geometry primitives and NURBS data model.
 
 v0.1: first API release (contract v0, Tier-1 promotion of the geometry
-primitives from ifckit, engine probe, and the M-phase test corpus). See
-``plans/geometrykit/PLAN-occ-exit.md`` in the admin repo for the roadmap.
+primitives from ifckit, engine probe, and the M-phase test corpus).
 """
 
 from geometrykit import contract, engine

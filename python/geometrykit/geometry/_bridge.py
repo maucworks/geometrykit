@@ -1,7 +1,7 @@
 """Optional IFC bridge for geometrykit.
 
-geometrykit is deliberately IFC-free (see ``plans/geometrykit/PLAN-occ-exit.md``
-§3: IFC serialisation stays in ifckit). A host application that wants the
+geometrykit is deliberately IFC-free (IFC serialisation stays in ifckit).
+A host application that wants the
 legacy ``to_ifc_*`` serialisation methods on geometry objects installs the
 ifckit IFC helper module as a bridge — the object must expose the helpers
 ``geometrykit`` callers use today: ``pt3`` (cartesian point) and

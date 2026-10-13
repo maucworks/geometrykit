@@ -1,8 +1,7 @@
 # This file was generated with the assistance of an AI coding tool.
 # Ported from ifckit/ifckit/geometry/__init__.py (LGPL-3.0-or-later heritage;
 # ifckit is authored by the same copyright holder). panel_report and the
-# IFC serialisation layer (ifc_geom) stay in ifckit by design — see
-# plans/geometrykit/PLAN-occ-exit.md §3.
+# IFC serialisation layer (ifc_geom) stay in ifckit by design.
 
 """
 geometrykit.geometry
