@@ -6,3 +6,9 @@ dist/
 build/
 target/
 .DS_Store
+
+# test artifacts
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/

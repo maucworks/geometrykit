@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geometrykit"
-version = "0.0.2"
+version = "0.1.0"
 description = "Geometry primitives and NURBS data model — the geometry substrate for the ifckit family"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -12,7 +12,7 @@ license = { file = "LICENSE" }
 authors = [{ name = "Sander Boer" }]
 keywords = ["geometry", "nurbs", "vector", "curve", "surface", "splines"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -24,11 +24,57 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Mathematics",
     "Topic :: Multimedia :: Graphics :: 3D Modeling",
 ]
+dependencies = []
+
+[project.optional-dependencies]
+# Pin policy inherited from ifckit: never open-ended; >= min-proven, <= current.
+dev = [
+    "pytest>=7,<10",
+    "pytest-cov>=7,<8",
+    "hypothesis>=6,<8",
+]
 
 [project.urls]
 Homepage = "https://github.com/maucworks/geometrykit"
 Changelog = "https://github.com/maucworks/geometrykit/blob/master/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
-where   = ["."]
+where   = ["python"]
 include = ["geometrykit*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "oracle: requires pythonocc-core (OCCT golden comparisons; skipped elsewhere)",
+    "rust: requires the geometrykit._rust accelerator extension",
+]
+filterwarnings = [
+    # strict on the package's own warnings...
+    "error::DeprecationWarning:geometrykit.*",
+    # ...except the intentional, documented deprecations. The Polyline
+    # deprecation fires with stacklevel=2 (origin reattributed to the caller),
+    # hence the message-based ignore rather than the module filter.
+    "ignore:Polyline is deprecated:DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["geometrykit"]
+branch = true
+omit = ["python/geometrykit/geometry/_bridge.py"]
+
+[tool.coverage.report]
+show_missing = true
+# No global fail_under: the ladder script owns the staged acceptance
+# (scripts/coverage_ladder.py) — the OCC-exit milestones raise the floors.
+
+[tool.ruff]
+line-length    = 100
+target-version = "py39"
+# Same convention as ifckit: the promoted legacy test modules are not ruffed.
+exclude = ["tests", "wip"]
+
+[tool.ruff.lint]
+# E, F, I for now: the Tier-1 ported modules arrive from ifckit's codebase before
+# docstring-rule cleanup (D) — D joins the ladder with the M2+ kernel work.
+select = ["E", "F", "I"]

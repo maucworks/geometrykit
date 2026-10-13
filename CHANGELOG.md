@@ -3,6 +3,17 @@
 - Name claim on PyPI + placeholder distribution. No API yet; the public
   contract is documented in README.md (roadmap) and ships with v0.1.
 
+# v0.1.0 — 2026-10-13
+
+- First API release (feature/contract): contract v0 (canonical form,
+  hex-float signatures, element records), engine probe (`_npu` floor +
+  future `_rust` accelerator), Tier-1 geometry promotion from ifckit
+  (primitives/transform/path/curve/surface/frames/biarc/spiral/subdivision/
+  field/patterns/intersection; IFC serialisation stays behind an optional
+  host bridge), and the four-layer test suite (legacy geometry suite,
+  contract, probe/parity, oracle, panel acceptance) with the A320 corpus
+  (827 element records) and the staged coverage ladder.
+
 # v0.0.2 — 2026-10-13
 
 - Repository URLs filled in (github.com/maucworks/geometrykit); metadata

@@ -17,6 +17,24 @@ API (planned v0.1: primitives promoted from `ifckit.geometry`, extracted
 from the A320 configurator corpus with its existing test coverage as oracle
 spec).
 
+## Development
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/pytest tests/ -q                       # full suite (plain env)
+# oracle-inclusive run + staged coverage ladder (needs pythonocc-core):
+/opt/miniconda3/envs/a320-ifc-configurator/bin/python -m pytest tests/ --cov -q
+/opt/miniconda3/envs/a320-ifc-configurator/bin/python -m coverage json -o /tmp/geometrykit-cov.json
+python scripts/coverage_ladder.py /tmp/geometrykit-cov.json
+# corpus refresh (A320 demos → tests/fixtures/corpus/):
+/opt/miniconda3/envs/a320-ifc-configurator/bin/python scripts/capture_corpus.py
+```
+
+Layers: `tests/geometry/` (ported ifckit geometry suite), `tests/test_contract.py`
+(contract v0), `tests/test_engine_probe.py` + `tests/test_engine_parity.py`
+(runtime split), `tests/oracle/` (OCCT goldens, skipif), `tests/panel/`
+(panelization acceptance, M2 tripwire).
+
 ## Roadmap (contract-first, per the kernel plan)
 
 - v0.1 — value-type primitives (`Vec`, `Plane`, `Arc`, `Line`, `Path`,
