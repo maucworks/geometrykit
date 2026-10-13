@@ -13,6 +13,9 @@
   host bridge), and the four-layer test suite (legacy geometry suite,
   contract, probe/parity, oracle, panel acceptance) with the A320 corpus
   (827 element records) and the staged coverage ladder.
+- Relicensed from MIT to **LGPL-3.0-or-later** (`COPYING.LESSER` +
+  `COPYING`), aligning with ifckit — the kernel carries code promoted
+  from ifckit's geometry package.
 
 # v0.0.2 — 2026-10-13
 

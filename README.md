@@ -47,6 +47,13 @@ Layers: `tests/geometry/` (ported ifckit geometry suite), `tests/test_contract.p
 - Out of scope by design: B-rep booleans, tolerant topology (the kernel is
   B-rep-free on purpose; volumes are ifcopenshell/OCCT's domain).
 
+## Licensing
+
+geometrykit is LGPL-3.0-or-later, aligned with ifckit. The kernel carries code
+promoted from ifckit's geometry package (see `plans/geometrykit/PLAN-occ-exit.md`
+in the admin repo) — the single-author relicense decision and the provenance
+of every carried module are documented in that repo's licensing rules.
+
 ## Sibling projects
 
 - `ifckit` — elements/builders/model that bind `geometrykit` to IFC.
