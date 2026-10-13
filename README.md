@@ -6,7 +6,11 @@ pcurves, and a tessellator — the geometry substrate for the ifckit family.
 
 ## Status
 
-This release (0.0.1) is a **name claim + placeholder**: the API is not yet
+Source of truth: `github.com/maucworks/geometrykit` — check it out anywhere;
+wheels are built from a checkout root (`python -m build`, `packages.find`
+over this layout). The package itself is unaware of check-out locations.
+
+Releases so far (0.0.1/0.0.2) are a **name claim + placeholder**: the API is not yet
 published, and the package intentionally exports nothing beyond
 `geometrykit.__version__`. Version bumps arrive with the first real
 API (planned v0.1: primitives promoted from `ifckit.geometry`, extracted

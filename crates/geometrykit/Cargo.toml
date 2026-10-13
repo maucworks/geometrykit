@@ -1,0 +1,11 @@
+[package]
+name = "geometrykit"
+version = "0.0.1"
+edition = "2021"
+description = "Geometry primitives and NURBS data model — the geometry substrate for the ifckit family"
+license = "MIT"
+repository = "https://github.com/maucworks/geometrykit"
+keywords = ["geometry", "nurbs", "splines", "curve", "surface"]
+categories = ["graphics", "mathematics", "science"]
+
+[dependencies]
