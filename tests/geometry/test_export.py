@@ -65,6 +65,20 @@ def _read_step(path):
     return reader.OneShape()
 
 
+def _make_edges():
+    """The four edge curves of the same network, as kernel `Curve`s."""
+    return [
+        Curve.from_tangents(
+            start=Vec(0, 0, 2.5), tan_start=Vec(1, 0, 0),
+            end=Vec(8, 0, 2.7), tan_end=Vec(1, 0, 0), scale=3.0,
+        ),
+        Curve.from_tangents(
+            start=Vec(8, 0, 2.7), tan_start=Vec(0, 1, 0),
+            end=Vec(8, 6, 3.1), tan_end=Vec(0, 1, 0), scale=3.0,
+        ),
+    ]
+
+
 class TestMeshWriters:
     """OBJ/STL: occ-free, any viewer or Blender reads them."""
 
@@ -107,6 +121,7 @@ class TestStepExport:
         assert "AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }" in text
         assert text.count("B_SPLINE_SURFACE_WITH_KNOTS") == 1
         assert text.count("ADVANCED_FACE") == 1
+        assert "GEOMETRIC_CURVE_SET" not in text, "no curves were asked for"
         assert "IFC" not in text
         # every pole reaches the file, at full precision
         for row in surface.control_points:
@@ -129,6 +144,85 @@ class TestStepExport:
         )
         with pytest.raises(ValueError, match="rational"):
             write_step_surfaces([rational], str(tmp_path / "r.step"))
+
+
+    def test_step_carries_edge_curves(self, tmp_path):
+        from geometrykit.export import write_step_geometry
+
+        surface = _make_patch()
+        edges = _make_edges()
+        out = tmp_path / "with-curves.step"
+        text = write_step_geometry(
+            str(out),
+            surfaces=[surface],
+            surface_labels=["Patch"],
+            curves=edges,
+            curve_labels=["Edge_south", "Edge_east"],
+        )
+        # the face contributes its own boundary curves, so count the curve
+        # set's members rather than every curve entity in the file
+        import re
+
+        match = re.search(r"GEOMETRIC_CURVE_SET\('edges',\((.*?)\)\);", text)
+        assert match is not None
+        assert len(match.group(1).split(",")) == 2
+        assert "'Edge_south'" in text and "'Edge_east'" in text
+        # one knot per multiplicity entry, same rule as the surface
+        assert "(4,4),(0.0,1.0)" in text
+
+    def test_step_curves_only(self, tmp_path):
+        """A file with curves and no surfaces is still a valid representation."""
+        from geometrykit.export import write_step_geometry
+
+        out = tmp_path / "curves-only.step"
+        text = write_step_geometry(
+            str(out), curves=_make_edges(), curve_labels=["A", "B"]
+        )
+        assert "GEOMETRIC_CURVE_SET" in text
+        assert "SHELL_BASED_SURFACE_MODEL" not in text
+        assert "MANIFOLD_SURFACE_SHAPE_REPRESENTATION" in text
+
+    def test_step_labels_must_match(self, tmp_path):
+        from geometrykit.export import write_step_geometry
+
+        with pytest.raises(ValueError, match="one label per curve"):
+            write_step_geometry(
+                str(tmp_path / "x.step"), curves=_make_edges(), curve_labels=["only-one"]
+            )
+
+    @pytest.mark.skipif(not _occ_available(), reason="needs pythonocc to read STEP back")
+    def test_occ_reads_the_edge_curves_back(self, tmp_path):
+        """The edge curves arrive as B-splines with the kernel's own endpoints."""
+        from OCC.Core.BRep import BRep_Tool
+        from OCC.Core.Geom import Geom_BSplineCurve
+        from OCC.Core.TopAbs import TopAbs_EDGE
+        from OCC.Core.TopExp import TopExp_Explorer
+
+        from geometrykit.export import write_step_geometry
+
+        edges = _make_edges()
+        out = tmp_path / "curves.step"
+        write_step_geometry(
+            str(out), curves=edges, curve_labels=["Edge_south", "Edge_east"]
+        )
+        shape = _read_step(out)
+
+        spans = []
+        explorer = TopExp_Explorer(shape, TopAbs_EDGE)
+        while explorer.More():
+            curve = Geom_BSplineCurve.DownCast(BRep_Tool.Curve(explorer.Current())[0])
+            if curve is not None and curve.NbPoles() == 4:
+                spans.append(curve)
+            explorer.Next()
+        assert len(spans) == 2, f"expected the two 4-pole edge curves, got {len(spans)}"
+
+        for curve, edge in zip(spans, edges):
+            start = curve.Value(curve.FirstParameter())
+            mine = edge.point_at(0.0)
+            assert abs(start.X() * MM_PER_M - mine.x) < 1e-9
+            assert abs(start.Y() * MM_PER_M - mine.y) < 1e-9
+            assert abs(start.Z() * MM_PER_M - mine.z) < 1e-9
+            assert curve.Degree() == edge.degree
 
     @pytest.mark.skipif(not _occ_available(), reason="needs pythonocc to read STEP back")
     def test_occ_reads_the_surface_back_exactly(self, tmp_path):

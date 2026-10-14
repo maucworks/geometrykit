@@ -34,9 +34,13 @@
   surfaces are refused rather than silently written unweighted. Verified by
   reading the file back with OCCT: identical pole coordinates (1e-12) and
   identical evaluated points (1e-9) on the flowing-roof patch, and both
-  patches of the roof arrive in one file. The driver builds the mixed-height
-  stress case, reports the G1 residuals and the deviation from the OCCT twin,
-  and writes OBJ/STL/STEP for viewer and CAD inspection.
+  patches of the roof arrive in one file. `write_step_geometry` also exports
+  standalone curves (`GEOMETRIC_CURVE_SET` of `B_SPLINE_CURVE_WITH_KNOTS`), so
+  a patch travels with the edge curves it was built from and every entity is
+  named. The driver writes one STEP per run: the kernel patch, its four
+  constraint ribbons and the seven network edge curves, in the mixed-height
+  stress case, with the G1 residuals and the twin deviation reported on
+  stdout (the OCCT twin is measured, not exported).
 
 # v0.0.1 — 2026-10-13
 

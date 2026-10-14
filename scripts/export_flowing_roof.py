@@ -29,7 +29,7 @@ fr = importlib.util.module_from_spec(_spec)
 sys.modules["flowing_roof"] = fr
 _spec.loader.exec_module(fr)
 
-from geometrykit.export import write_obj, write_step_surfaces, write_stl  # noqa: E402
+from geometrykit.export import write_step_geometry  # noqa: E402
 from geometrykit.runtimes._npu import patch_g1, patch_np  # noqa: E402
 
 # the mixed-height network: the real non-planar G1 stress case
@@ -130,26 +130,36 @@ def main() -> None:
         params = stations[0] if edge in ("south", "north") else stations[1]
         print(f"  G1 residual {edge:>5}: {edge_residual(p1_surf, edge, params, fields[edge]):.3e}")
 
-    # the constraint ribbons travel with the patches: a zebra or
-    # curvature analysis across the shared seams is the visual G1 check
-    ribbon_order = [name for _edge, name in EDGES]
-    surfaces = [p1_surf, g.surf] + [g.ribbons[name] for name in ribbon_order]
-    labels = ["PatchKernelG1", "PatchOccTwin"] + [
-        f"Ribbon_{edge}" for edge, _name in EDGES
+    # One file, three named groups, no OCCT twin: the kernel patch, the four
+    # constraint ribbons it was solved against, and the seven edge curves the
+    # network is made of. A zebra or curvature analysis across the patch to
+    # ribbon seams is the visual counterpart of the G1 residuals above.
+    surfaces = [p1_surf] + [g.ribbons[name] for _edge, name in EDGES]
+    surface_labels = ["PatchKernelG1"] + [f"Ribbon_{edge}" for edge, _name in EDGES]
+    edges = [
+        ("Edge_bottom", g.bottom),
+        ("Edge_right", g.right),
+        ("Edge_top_ridge", g.top),
+        ("Edge_left", g.left),
+        ("Edge_right_back", g.right2),
+        ("Edge_top_back_eave", g.top2),
+        ("Edge_left_back", g.left2),
     ]
-    obj_path = out_dir / "flowing-roof-patches.obj"
-    write_obj(surfaces, str(obj_path), labels=labels)
-    print(f"OBJ  -> {obj_path}")
-
-    stl_path = out_dir / "flowing-roof-patches.stl"
-    write_stl(surfaces, str(stl_path))
-    print(f"STL  -> {stl_path}")
-
-    step_path = out_dir / "flowing-roof-patches.step"
-    write_step_surfaces(surfaces, str(step_path), labels=labels)
+    step_path = out_dir / "flowing-roof.step"
+    write_step_geometry(
+        str(step_path),
+        surfaces=surfaces,
+        surface_labels=surface_labels,
+        curves=[curve for _label, curve in edges],
+        curve_labels=[label for label, _curve in edges],
+    )
     print(f"STEP -> {step_path}")
-
-    print("load the OBJ in any 3D viewer, the STEP in a CAD system")
+    for label, curve in edges:
+        a, b = curve.point_at(0.0), curve.point_at(1.0)
+        print(
+            f"  {label:>20}: ({a.x:5.2f},{a.y:5.2f},{a.z:5.2f}) -> "
+            f"({b.x:5.2f},{b.y:5.2f},{b.z:5.2f})"
+        )
 
 
 if __name__ == "__main__":

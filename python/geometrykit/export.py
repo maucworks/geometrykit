@@ -240,6 +240,21 @@ def _step_edge(step, label, curve, param_origin, param_dir, context, surface_id)
     return step.add(f"SURFACE_CURVE('{label}',#{curve},(#{pcurve}),.PCURVE_S1.)")
 
 
+def _step_bspline_curve(step: _StepFile, curve, label: str) -> int:
+    """A standalone B_SPLINE_CURVE_WITH_KNOTS from a kernel `Curve`.
+
+    Distinct knots with their multiplicities, the same pairing the surface
+    entity uses. Rational curves are rejected by the caller.
+    """
+    ids = [_step_point(step, (p.x, p.y, p.z)) for p in curve.points]
+    rows = ",".join(f"#{i}" for i in ids)
+    return step.add(
+        f"B_SPLINE_CURVE_WITH_KNOTS('{label}',{int(curve.degree)},({rows}),"
+        f".UNSPECIFIED.,.F.,.F.,({_step_mult_list(curve.multiplicities)}),"
+        f"({_step_knot_list(curve.knots, curve.multiplicities)}),.UNSPECIFIED.)"
+    )
+
+
 def _step_face(step: _StepFile, surface, label: str, context, param_context) -> int:
     """One ADVANCED_FACE over *surface*, bounded by its four boundary curves.
 
@@ -314,8 +329,14 @@ def _step_face(step: _StepFile, surface, label: str, context, param_context) -> 
     return step.add(f"ADVANCED_FACE('{label}',(#{bound}),#{surf},.T.)")
 
 
-def write_step_surfaces(surfaces: list, path, labels=None) -> str:
-    """Write NURBS surfaces to an AP214 STEP file (manifold surface B-rep).
+def write_step_geometry(
+    path,
+    surfaces=(),
+    surface_labels=None,
+    curves=(),
+    curve_labels=None,
+) -> str:
+    """Write NURBS surfaces and curves to an AP214 STEP file.
 
     Real ``B_SPLINE_SURFACE_WITH_KNOTS`` inside ``ADVANCED_FACE``s, wrapped in
     the ``SHELL_BASED_SURFACE_MODEL`` / ``MANIFOLD_SURFACE_SHAPE_REPRESENTATION``
@@ -324,20 +345,37 @@ def write_step_surfaces(surfaces: list, path, labels=None) -> str:
     nothing is approximated: the control net round-trips exactly and a reader
     reconstructs the same knots, poles and geometry.
 
+    Surfaces become ``ADVANCED_FACE``s in a ``SHELL_BASED_SURFACE_MODEL``;
+    curves become a ``GEOMETRIC_CURVE_SET`` of ``B_SPLINE_CURVE_WITH_KNOTS``
+    edges. Both are named, so a CAD object tree reads like the kernel's own
+    vocabulary.
+
     Args:
-        surfaces: list of `Surface` (rational weights are rejected rather
-            than silently dropped -- the exchange needs weighted poles).
-        path:     output file.
-        labels:   optional names, one per surface.
+        path:            output file.
+        surfaces:        list of `Surface`.
+        surface_labels:  names, one per surface.
+        curves:          list of `Curve` (edge curves travel with the patches
+            they bound).
+        curve_labels:    names, one per curve.
+
+    Rational weights are rejected rather than silently dropped -- the
+    exchange needs weighted poles.
 
     Returns:
         The STEP text that was written.
     """
-    labels = labels or [f"Patch_{i}" for i in range(len(surfaces))]
-    for surface, label in zip(surfaces, labels):
-        if getattr(surface, "rational", False):
+    surfaces = list(surfaces)
+    curves = list(curves)
+    labels = list(surface_labels or [f"Surface_{i}" for i in range(len(surfaces))])
+    curve_labels = list(curve_labels or [f"Curve_{i}" for i in range(len(curves))])
+    if len(labels) != len(surfaces):
+        raise ValueError("one label per surface is required")
+    if len(curve_labels) != len(curves):
+        raise ValueError("one label per curve is required")
+    for item, label in list(zip(surfaces, labels)) + list(zip(curves, curve_labels)):
+        if getattr(item, "rational", False):
             raise ValueError(
-                f"STEP export of the rational surface '{label}' is not supported "
+                f"STEP export of the rational geometry '{label}' is not supported "
                 "(the exchange format needs weighted poles)"
             )
 
@@ -376,15 +414,27 @@ def write_step_surfaces(surfaces: list, path, labels=None) -> str:
     )
 
     axis = _step_axis(step)
-    faces = [
-        _step_face(step, surface, label, geom_context, param_context)
-        for surface, label in zip(surfaces, labels)
-    ]
-    shell = step.add(f"OPEN_SHELL('',({','.join('#' + str(f) for f in faces)}))")
-    model = step.add(f"SHELL_BASED_SURFACE_MODEL('',(#{shell}))")
+    items = [f"#{axis}"]
+    if surfaces:
+        faces = [
+            _step_face(step, surface, label, geom_context, param_context)
+            for surface, label in zip(surfaces, labels)
+        ]
+        shell = step.add(f"OPEN_SHELL('',({','.join('#' + str(f) for f in faces)}))")
+        model = step.add(f"SHELL_BASED_SURFACE_MODEL('',(#{shell}))")
+        items.append(f"#{model}")
+    if curves:
+        curve_ids = [
+            _step_bspline_curve(step, curve, label)
+            for curve, label in zip(curves, curve_labels)
+        ]
+        curve_set = step.add(
+            f"GEOMETRIC_CURVE_SET('edges',({','.join('#' + str(c) for c in curve_ids)}))"
+        )
+        items.append(f"#{curve_set}")
     rep = step.add(
-        f"MANIFOLD_SURFACE_SHAPE_REPRESENTATION('geometrykit_patches',"
-        f"(#{axis},#{model}),#{geom_context})"
+        f"MANIFOLD_SURFACE_SHAPE_REPRESENTATION('geometrykit_geometry',"
+        f"({','.join(items)}),#{geom_context})"
     )
     step.add(f"SHAPE_DEFINITION_REPRESENTATION(#{shape},#{rep})")
 
@@ -393,3 +443,8 @@ def write_step_surfaces(surfaces: list, path, labels=None) -> str:
         raise AssertionError("unformatted placeholder left in the STEP output")
     step.write(path)
     return text
+
+
+def write_step_surfaces(surfaces: list, path, labels=None) -> str:
+    """Surfaces-only shorthand for `write_step_geometry`."""
+    return write_step_geometry(path, surfaces=surfaces, surface_labels=labels)
