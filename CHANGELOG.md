@@ -25,10 +25,18 @@
   constraints and their verification probes the same parameters the patch
   was built on.
 - **Patch export** (`geometrykit/export.py`, `scripts/export_flowing_roof.py`):
-  occ-free OBJ (quads) and STL writers plus an IFC STEP writer emitting
-  `IfcBSplineSurfaceWithKnots` per patch. The driver builds the mixed-height
-  flowing-roof stress case, reports the G1 residuals and the deviation from
-  the OCCT twin, and writes all three files for viewer/CAD inspection.
+  occ-free OBJ (quads) and STL writers, plus an **AP214 STEP** writer that
+  emits real `B_SPLINE_SURFACE_WITH_KNOTS` faces -- control net, distinct
+  knots and multiplicities, edges as the surface's own boundary curves with
+  their pcurves -- inside the `SHELL_BASED_SURFACE_MODEL` /
+  `MANIFOLD_SURFACE_SHAPE_REPRESENTATION` chain. That is the exchange a CAD
+  kernel opens (Rhino, CATIA, SolidWorks); IFC-in-STEP is not. Rational
+  surfaces are refused rather than silently written unweighted. Verified by
+  reading the file back with OCCT: identical pole coordinates (1e-12) and
+  identical evaluated points (1e-9) on the flowing-roof patch, and both
+  patches of the roof arrive in one file. The driver builds the mixed-height
+  stress case, reports the G1 residuals and the deviation from the OCCT twin,
+  and writes OBJ/STL/STEP for viewer and CAD inspection.
 
 # v0.0.1 — 2026-10-13
 

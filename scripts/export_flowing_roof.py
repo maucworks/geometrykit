@@ -1,13 +1,13 @@
 # This file was generated with the assistance of an AI coding tool.
 """Export the flowing-roof patches (P-1 kernel + OCCT twin) to OBJ/STL/STEP.
 
-Run in an env with pythonocc + ifcopenshell:
+Run in an env with pythonocc (the ribbon normals and the twin):
 
     /opt/miniconda3/envs/a320-ifc-configurator/bin/python \
         scripts/export_flowing_roof.py
 
-The OBJ/STL writers themselves are occ-free; only the constraint normals
-(OCCT ribbon surfaces) and the STEP writer need the extra packages.
+All three writers are occ-free; only the constraint normals (OCCT ribbon
+surfaces) and the twin comparison need pythonocc.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ fr = importlib.util.module_from_spec(_spec)
 sys.modules["flowing_roof"] = fr
 _spec.loader.exec_module(fr)
 
-from geometrykit.export import surfaces_to_ifc_step, write_obj, write_stl  # noqa: E402
+from geometrykit.export import write_obj, write_step_surfaces, write_stl  # noqa: E402
 from geometrykit.runtimes._npu import patch_g1, patch_np  # noqa: E402
 
 # the mixed-height network: the real non-planar G1 stress case
@@ -137,12 +137,9 @@ def main() -> None:
     write_stl(surfaces, str(stl_path))
     print(f"STL  -> {stl_path}")
 
-    try:
-        step_path = out_dir / "flowing-roof-patches.step"
-        surfaces_to_ifc_step(surfaces, str(step_path), labels=labels)
-        print(f"STEP -> {step_path}")
-    except ImportError:
-        print("ifcopenshell not available - skipping the STEP export")
+    step_path = out_dir / "flowing-roof-patches.step"
+    write_step_surfaces(surfaces, str(step_path), labels=labels)
+    print(f"STEP -> {step_path}")
 
     print("load the OBJ in any 3D viewer, the STEP in a CAD system")
 
