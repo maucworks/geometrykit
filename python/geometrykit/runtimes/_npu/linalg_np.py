@@ -307,17 +307,18 @@ def plate_fill(
     nx: int,
     ny: int,
     slopes: dict | None = None,
+    curvatures: dict | None = None,
     steps: tuple = (1.0, 1.0),
 ) -> list:
     """Fill a grid interior with a minimising plate through its boundary data.
 
-    ``values`` is a flat row-major list of ``(x, y, z)`` triples, ``(nx+1)`` by
-    ``(ny+1)``, with the boundary ring already set to the boundary data; the
-    interior is replaced by the solution of the thin-plate equation.
+    ``values`` is a flat row-major list of ``(x, y, z)`` triples, ``(nx+1)``
+    by ``(ny+1)``, with the boundary ring already set to the boundary data;
+    the interior is replaced by the solution of the thin-plate equation.
 
     The biharmonic is fourth order, so boundary data alone leaves it
     under-determined -- one more condition per boundary station is needed.
-    Two closures are available, per side:
+    Closures, per side:
 
     - **simply supported** (the default): zero cross-curvature on the
       boundary, imposed by the reflection ``u_ghost = 2 u_edge - u_inner``.
@@ -332,37 +333,104 @@ def plate_fill(
       are reproduced exactly under it too.
 
     ``slopes`` (optional) maps a side name -- ``"west"``, ``"east"``,
-    ``"south"``, ``"north"`` -- to a list of 3-vectors, one per station *along*
-    that side (west/east: ``ny+1`` entries indexed by the second grid index;
-    south/north: ``nx+1`` entries by the first). Each vector is the demanded
-    cross-derivative *per unit grid parameter in the increasing-index
-    direction* at that station; the ``-+`` sign above folds the side's
-    orientation, so callers on the west/south sides pass the slope as-wanted,
-    east/north sides pass it negated. Sides absent from the dict fall back to
-    the simply-supported closure. ``steps`` is the uniform grid spacing
-    ``(du, dv)`` in the two grid directions.
+    ``"south"``, ``"north"`` -- to a list of 3-vectors, one per station
+    *along* that side (west/east: ``ny+1`` entries indexed by the second
+    grid index; south/north: ``nx+1`` entries by the first). Each vector is
+    the demanded cross-derivative *per unit grid parameter in the
+    increasing-index direction* at that station; the ``-+`` sign above folds
+    the side's orientation, so callers on the west/south sides pass the
+    slope as-wanted, east/north sides pass it negated. Sides absent from the
+    dict fall back to the simply-supported closure. ``steps`` is the uniform
+    grid spacing ``(du, dv)``.
+
+    With ``curvatures`` a side carries its *cross-curvature* too -- G2,
+    still as a condition of the solve. The second derivative is
+    direction-even, so no per-side orientation is folded. The 13-point
+    stencil has one ghost per side, which the slope relation consumes -- a
+    curvature condition cannot ride along there: value, slope and curvature
+    together cost exactly one degree of freedom per boundary station, and
+    pinning the first ring to the Hermite extrapolation is the *wrong* way
+    to pay it (the plate loses its natural first ring, and the fill
+    roughens by ~3x on flat ribbons, measured). The consistent scheme
+    instead **eliminates the second ring inward**: the cross second
+    difference across the first two spans
+    ``(u_edge - 2 u_ring1 + u_ring2) / dv^2`` is set to the curvature data,
+    so ``u_ring2 = 2 u_ring1 - u_edge + dv^2 * kappa``. The first inner
+    ring stays a free unknown carrying the plate's own answer; ring 2
+    becomes a linear function of it wherever referenced, and ring 2's own
+    PDE rows are absorbed into their inner ring's rows by the reduction.
+    The relation is exact for quadratics, so slope and curvature data taken
+    from ``x**2`` reproduce it exactly. A side with curvatures needs slopes
+    on that side. When two sides' elimination belts overlap (only on tiny
+    grids), the west/east claims win.
 
     Returns the filled grid with the boundary ring untouched.
     """
     stride = ny + 1
-    unknown = [
-        (i, j) for i in range(1, nx) for j in range(1, ny)
-    ]
-    index = {point: k for k, point in enumerate(unknown)}
-    n = len(unknown)
-    rows: list = [dict() for _ in range(n)]
-    rhs: list = [[0.0, 0.0, 0.0] for _ in range(n)]
-
     du, dv = steps
     west = None if slopes is None else slopes.get("west")
     east = None if slopes is None else slopes.get("east")
     south = None if slopes is None else slopes.get("south")
     north = None if slopes is None else slopes.get("north")
+    cw = None if curvatures is None else curvatures.get("west")
+    ce = None if curvatures is None else curvatures.get("east")
+    cs = None if curvatures is None else curvatures.get("south")
+    cn = None if curvatures is None else curvatures.get("north")
+
+    values = list(values)
+    claimed: dict = {}
+
+    if cw is not None and nx > 4:
+        if west is None:
+            raise ValueError("a curvature condition needs slope data on the side")
+        for j in range(1, ny):
+            claimed[(2, j)] = ((1, j), (0, j), cw[j], du * du)
+    if ce is not None and nx > 4:
+        if east is None:
+            raise ValueError("a curvature condition needs slope data on the side")
+        for j in range(1, ny):
+            claimed[(nx - 2, j)] = ((nx - 1, j), (nx, j), ce[j], du * du)
+    if cs is not None and ny > 4:
+        if south is None:
+            raise ValueError("a curvature condition needs slope data on the side")
+        for i in range(1, nx):
+            claimed.setdefault((i, 2), ((i, 1), (i, 0), cs[i], dv * dv))
+    if cn is not None and ny > 4:
+        if north is None:
+            raise ValueError("a curvature condition needs slope data on the side")
+        for i in range(1, nx):
+            claimed.setdefault((i, ny - 2), ((i, ny - 1), (i, ny), cn[i], dv * dv))
+
+    # -- the reduction --------------------------------------------------------
+    # A point claimed by a curvature condition is a *linear function of its
+    # first ring* (that is the curvature condition: the cross second
+    # difference across the first two spans equals the data). The reduced
+    # system is therefore P^T A P over the substitution operator P: in full
+    # coordinates every point maps to itself, except a claimed point, which
+    # maps to 2*inner - edge + step^2*kappa. Merely dropping the claimed
+    # columns is not that reduction -- it loses the claimed rows' own
+    # contributions and renders the reduced matrix indefinite (exactly what
+    # the first elimination attempt hit, with the Hermite pin on ring 1).
+    interior = [(i, j) for i in range(1, nx) for j in range(1, ny)]
+    reduced = [point for point in interior if point not in claimed]
+    index = {point: k for k, point in enumerate(reduced)}
+
+    def _value(point):
+        return values[point[0] * stride + point[1]]
+
+    def _sum_terms(a: dict, scale_a: float, b: dict, scale_b: float) -> dict:
+        out: dict = {}
+        for point, value in a.items():
+            out[point] = out.get(point, 0.0) + scale_a * value
+        for point, value in b.items():
+            out[point] = out.get(point, 0.0) + scale_b * value
+        return out
 
     def reference(i: int, j: int):
         """In-grid terms (a dict) and a fixed constant of one grid reference."""
         if 0 <= i <= nx and 0 <= j <= ny:
             return {(i, j): 1.0}, ()
+        # clamped sides: the ghost is eliminated by the slope relation
         if i < 0 and west is not None and 0 <= j <= ny:
             return {(1, j): 1.0}, tuple(-2.0 * du * c for c in west[j])
         if i > nx and east is not None and 0 <= j <= ny:
@@ -386,30 +454,74 @@ def plate_fill(
             (),
         )
 
-    def _sum_terms(a: dict, scale_a: float, b: dict, scale_b: float) -> dict:
-        out: dict = {}
-        for point, value in a.items():
-            out[point] = out.get(point, 0.0) + scale_a * value
-        for point, value in b.items():
-            out[point] = out.get(point, 0.0) + scale_b * value
-        return out
-
-    for (i, j) in unknown:
-        k = index[(i, j)]
+    # full operator: rows for EVERY interior point (ghosts and reflections
+    # as in the slope-only closure), fixed references separated out.
+    full: dict = {}
+    for (i, j) in interior:
+        row: dict = {}
+        const: list = [0.0, 0.0, 0.0]
         for (di, dj, coefficient) in _PLATE_STENCIL:
-            terms, constant = reference(i + di, j + dj)
-            for (ii, jj), weight in terms.items():
-                value = coefficient * weight
-                slot = index.get((ii, jj))
-                if slot is None:
-                    fixed = values[ii * stride + jj]
-                    for comp in range(3):
-                        rhs[k][comp] -= value * fixed[comp]
-                else:
-                    rows[k][slot] = rows[k].get(slot, 0.0) + value
-            if constant:
+            terms, extra = reference(i + di, j + dj)
+            for (ii, jj), w in terms.items():
+                row[(ii, jj)] = row.get((ii, jj), 0.0) + coefficient * w
+            if extra:
                 for comp in range(3):
-                    rhs[k][comp] -= coefficient * constant[comp]
+                    const[comp] += coefficient * extra[comp]
+        full[(i, j)] = (row, const)
+
+    def _decl(point):
+        """(variable weights, additive constant) of one full coordinate.
+
+        Claims compose: at corner quadrants an east/west belt's inner point
+        can itself be claimed by the north/south belt, so the substitution
+        resolves transitively until it lands on free unknowns only. Each
+        level is exact for the datum, so the composition is exact too.
+        """
+        weights: dict = {}
+        additive: list = [0.0, 0.0, 0.0]
+        stack = [(point, 1.0)]
+        while stack:
+            p, w = stack.pop()
+            claim = claimed.get(p)
+            if claim is None:
+                weights[p] = weights.get(p, 0.0) + w
+                continue
+            inner, edge_point, kappa, step_sq = claim
+            stack.append((inner, 2.0 * w))
+            v = _value(edge_point)
+            for comp in range(3):
+                additive[comp] += w * (-v[comp] + step_sq * kappa[comp])
+        return weights, (additive[0], additive[1], additive[2])
+
+    n = len(reduced)
+    rows: list = [dict() for _ in range(n)]
+    rhs: list = [[0.0, 0.0, 0.0] for _ in range(n)]
+
+    for r in interior:
+        row, const = full[r]
+        weights_r, _add_r = _decl(r)
+        for a, alpha in weights_r.items():
+            ta = index.get(a)
+            for q, w in row.items():
+                if q[0] == 0 or q[0] == nx or q[1] == 0 or q[1] == ny:
+                    # fixed boundary ring: data
+                    if ta is not None:
+                        value = _value(q)
+                        for comp in range(3):
+                            rhs[ta][comp] -= alpha * w * value[comp]
+                    continue
+                weights_q, add_q = _decl(q)
+                if ta is None:
+                    continue
+                for b, beta in weights_q.items():
+                    tb = index.get(b)
+                    if tb is not None:
+                        rows[ta][tb] = rows[ta].get(tb, 0.0) + alpha * beta * w
+                for comp in range(3):
+                    rhs[ta][comp] -= alpha * w * add_q[comp]
+            if any(const):
+                for comp in range(3):
+                    rhs[ta][comp] -= alpha * const[comp]
 
     bandwidth = max(
         (j - i for i, row in enumerate(rows) for j in row if j > i), default=0
@@ -419,6 +531,14 @@ def plate_fill(
                 for c in range(3)]
 
     out = list(values)
-    for k, (i, j) in enumerate(unknown):
+    for k, (i, j) in enumerate(reduced):
         out[i * stride + j] = (solution[0][k], solution[1][k], solution[2][k])
+    for (i, j), (inner, edge_point, kappa, step_sq) in claimed.items():
+        base = out[inner[0] * stride + inner[1]]
+        edge = out[edge_point[0] * stride + edge_point[1]]
+        out[i * stride + j] = (
+            2.0 * base[0] - edge[0] + step_sq * kappa[0],
+            2.0 * base[1] - edge[1] + step_sq * kappa[1],
+            2.0 * base[2] - edge[2] + step_sq * kappa[2],
+        )
     return out

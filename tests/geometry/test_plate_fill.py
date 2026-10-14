@@ -223,6 +223,109 @@ class TestClampedPlateSolve:
         assert worst < 1e-9, worst
 
 
+class TestCurvaturePinnedSolve:
+    """M4: a side with slope AND curvature data pins its first inner ring.
+
+    Value, slope and curvature cost exactly one degree of freedom per
+    boundary station at the plate stencil -- the ghost is consumed by the
+    slope relation -- so the consistent scheme fixes ring 1 to the Hermite
+    value ``u_edge + du*slope + du^2*kappa/2``. That is quadratic-exact:
+    with data taken from a quadratic datum the pinned ring *is* the sampled
+    ring and the fill reproduces the datum exactly. (The first attempt of
+    this milestone had the pin without the curvature term and lost ``x**2``.)
+    """
+
+    @staticmethod
+    def _data(f, dfx, dfy, dfxx, dfyy, nx=8, ny=6, step=1.0):
+        values = [
+            (f(i * step, j * step), 0.0, 0.0)
+            for i in range(nx + 1)
+            for j in range(ny + 1)
+        ]
+        slopes = {
+            "west": [(dfx(0.0, j * step), 0.0, 0.0) for j in range(ny + 1)],
+            "east": [(dfx(nx * step, j * step), 0.0, 0.0) for j in range(ny + 1)],
+            "south": [(dfy(i * step, 0.0), 0.0, 0.0) for i in range(nx + 1)],
+            "north": [(dfy(i * step, ny * step), 0.0, 0.0) for i in range(nx + 1)],
+        }
+        curvatures = {
+            "west": [(dfxx(0.0, j * step), 0.0, 0.0) for j in range(ny + 1)],
+            "east": [(dfxx(nx * step, j * step), 0.0, 0.0) for j in range(ny + 1)],
+            "south": [(dfyy(i * step, 0.0), 0.0, 0.0) for i in range(nx + 1)],
+            "north": [(dfyy(i * step, ny * step), 0.0, 0.0) for i in range(nx + 1)],
+        }
+        return values, slopes, curvatures
+
+    @staticmethod
+    def _exact(name, f, dfx, dfy, dfxx, dfyy, nx=8, ny=6, step=1.0,
+               sides=("west", "east", "south", "north")):
+        values, slopes, curvatures = TestCurvaturePinnedSolve._data(
+            f, dfx, dfy, dfxx, dfyy, nx=nx, ny=ny, step=step
+        )
+        selected = {k: v for k, v in curvatures.items() if k in sides}
+        filled = linalg_np.plate_fill(
+            values, nx, ny,
+            slopes=slopes,
+            curvatures=selected,
+            steps=(step, step),
+        )
+        worst = max(
+            abs(filled[i * (ny + 1) + j][0] - f(i * step, j * step))
+            for i in range(nx + 1)
+            for j in range(ny + 1)
+        )
+        assert worst < 1e-9, (name, worst)
+
+    def test_bilinear_with_pin(self):
+        self._exact(
+            "x*y", lambda x, y: x * y,
+            lambda x, y: y, lambda x, y: x,
+            lambda x, y: 0.0, lambda x, y: 0.0,
+        )
+
+    def test_quadratic_with_pin(self):
+        self._exact(
+            "x*y + 2x^2 + 3y^2", lambda x, y: x * y + 2.0 * x * x + 3.0 * y * y,
+            lambda x, y: y + 4.0 * x, lambda x, y: x + 6.0 * y,
+            lambda x, y: 4.0, lambda x, y: 6.0,
+        )
+
+    def test_mixed_pin_and_clamp(self):
+        self._exact(
+            "x*y + 2x^2 + 3y^2 (mixed)",
+            lambda x, y: x * y + 2.0 * x * x + 3.0 * y * y,
+            lambda x, y: y + 4.0 * x, lambda x, y: x + 6.0 * y,
+            lambda x, y: 4.0, lambda x, y: 6.0,
+            sides=("west", "east"),  # south/north keep the G1 clamp
+        )
+
+    def test_non_unit_step_with_pin(self):
+        self._exact(
+            "x*y + 2x^2 (step)",
+            lambda x, y: x * y + 2.0 * x * x,
+            lambda x, y: y + 4.0 * x, lambda x, y: x,
+            lambda x, y: 4.0, lambda x, y: 0.0,
+            step=0.3704,
+        )
+
+    def test_slope_only_datum_is_unchanged(self):
+        """The M3 route must not have shifted: no curvature data, no pins."""
+        self._exact(
+            "x*y slope-only", lambda x, y: x * y,
+            lambda x, y: y, lambda x, y: x,
+            lambda x, y: 0.0, lambda x, y: 0.0,
+            sides=(),  # curvatures dict empty -> clamped like M3
+        )
+
+    def test_pins_need_slope_on_the_side(self):
+        values = [(float(i * j), 0.0, 0.0) for i in range(9) for j in range(7)]
+        with pytest.raises(ValueError):
+            linalg_np.plate_fill(
+                values, 8, 6, curvatures={k: [(0.0, 0.0, 0.0)] * n for k, n in
+                                           (("west", 7), ("east", 7), ("south", 9), ("north", 9))}
+            )
+
+
 class TestPlateFillPatch:
     """The fill at patch level: boundary exact, interior smoother than Coons."""
 
@@ -312,6 +415,101 @@ def _slope_ratio(surface, edge: str, t: float) -> float:
         cross = surface.tangents_at(1.0, t)[0]
     extent = max(patch_g1._cross_extent(surface, edge, t), 1e-9)
     return abs(cross) / extent
+
+
+@pytest.mark.skipif(not _occ_available(), reason="needs pythonocc for ribbons")
+class TestCurvatureBeltOptIn:
+    """M4's eliminated ring: exact machinery, but opt-in and measured worse.
+
+    For flat ribbons the belts pin zero cross-curvature across the first two
+    spans; the roof's own bend then lives one span inward, which roughens the
+    interior and makes the G2 row pass diverge on the mixed-height network.
+    The gates here assert only what the machinery guarantees -- boundary
+    exactness, and that the opt-in path routes the belts -- not the shape.
+
+    (The shape verdict lives in the research note and the plan record: G2
+    stays with the row passes for near-flat supports.)
+    """
+
+    def _fields(self, support_table):
+        curves = _network()
+        params_u, params_v, oriented = patch_np.coons_parametrization(
+            curves, nu=12, nv=12, parametrization="arclength"
+        )
+        curves = _network()
+        fields = {}
+        for edge, spine, support in zip(
+            patch_g1.EDGE_NAMES, curves, support_table
+        ):
+            fields[edge] = patch_g1.support_constraint(
+                support, spine, towards=Vec(4, 3, 2.9)
+            )
+        return curves, params_u, params_v, oriented, fields
+
+    def test_belt_fill_keeps_the_boundary_exact(self):
+        supports = [
+            Surface.ribbon(c, angle_deg=0, width=1.0, symmetric=True)
+            for c in _network()
+        ]
+        curves, params_u, params_v, oriented, fields = self._fields(supports)
+        coons, _c = patch_np.discrete_coons_patch(
+            curves, nu=12, nv=12, parametrization="arclength"
+        )
+        slopes = patch_g1.grid_edge_slopes(
+            coons, oriented, params_u, params_v, fields, 1.0
+        )
+        curvatures = patch_g1.grid_edge_curvatures(
+            coons, oriented, params_u, params_v, fields
+        )
+        fill, _corners = patch_np.discrete_plate_fill(
+            curves, nu=12, nv=12, parametrization="arclength",
+            slopes=slopes, curvatures=curvatures,
+        )
+        for edge, spine in zip(patch_g1.EDGE_NAMES, curves):
+            params = params_u if edge in ("south", "north") else params_v
+            curve_params = patch_np.edge_curve_params(oriented, edge, params)
+            for k, t in enumerate(params):
+                if edge == "south":
+                    got = fill.point_at(t, 0.0)
+                elif edge == "north":
+                    got = fill.point_at(t, 1.0)
+                elif edge == "west":
+                    got = fill.point_at(0.0, t)
+                else:
+                    got = fill.point_at(1.0, t)
+                assert abs(got - spine.point_at(curve_params[k])) < 1e-12, (edge, k)
+
+    def test_entry_keeps_belts_opt_in(self):
+        """g2=True with no g2_in_fill must not belt: the fill equals the
+        slope-clamped one."""
+        ridged = [
+            Surface.ribbon(_network()[0], angle_deg=0, width=1.0, symmetric=True),
+            Surface.ribbon(_network()[1], angle_deg=0, width=1.0, symmetric=True),
+            Surface.ribbon(
+                _network()[2], angles_deg=[180, 155, 180], width=1.0, symmetric=True
+            ),
+            Surface.ribbon(_network()[3], angle_deg=0, width=1.0, symmetric=True),
+        ]
+        curves, _pu, _pv, _o, fields = self._fields(ridged)
+        surface, _c, _st = patch_g1.constrained_coons_patch(
+            curves, fields, nu=12, nv=12, tangency=1.0, g2=True, fill=True,
+            parametrization="arclength",
+        )
+        reference, _c, _st = patch_g1.constrained_coons_patch(
+            curves, fields, nu=12, nv=12, tangency=1.0, g2=True, fill=True,
+            g2_in_fill=True, parametrization="arclength",
+        )
+        same = max(
+            abs(surface.point_at(i / 10, j / 10) - reference.point_at(i / 10, j / 10))
+            for i in range(11)
+            for j in range(11)
+        )
+        assert same > 1e-3, same  # the opt-in genuinely changes the patch
+        exact = max(
+            abs(surface.point_at(i / 10, 0.0) - reference.point_at(i / 10, 0.0))
+            for i in range(11)
+        )
+        assert exact < 1e-9, exact  # ...but never the boundary
 
 
 @pytest.mark.skipif(not _occ_available(), reason="needs pythonocc for ribbons")

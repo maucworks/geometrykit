@@ -418,6 +418,7 @@ def discrete_plate_fill(
     degree: int = 3,
     parametrization: str = "arclength",
     slopes: dict | None = None,
+    curvatures: dict | None = None,
     steps: tuple | None = None,
 ):
     """A four-boundary patch whose interior is a minimising plate fill.
@@ -433,7 +434,9 @@ def discrete_plate_fill(
     values alone. ``slopes`` upgrades a side to the clamped closure -- the
     support's cross-derivative is then a boundary condition of the solve
     itself, which is where a G1-constrained fill gets its stiffness without
-    post-hoc corrections. ``steps`` is the grid spacing ``(du, dv)``.
+    post-hoc corrections. ``curvatures`` (per side, needing slopes on that
+    side) pins the first ring inward to the Hermite value -- the G2 condition
+    inside the solve. ``steps`` is the grid spacing ``(du, dv)``.
 
     Returns ``(surface, corners)`` like `discrete_coons_patch`.
     """
@@ -447,7 +450,9 @@ def discrete_plate_fill(
     flat = [(point[0], point[1], point[2]) for row in grid for point in row]
     if steps is None:
         steps = (params_u[1] - params_u[0], params_v[1] - params_v[0])
-    filled = linalg_np.plate_fill(flat, n_u - 1, n_v - 1, slopes=slopes, steps=steps)
+    filled = linalg_np.plate_fill(
+        flat, n_u - 1, n_v - 1, slopes=slopes, curvatures=curvatures, steps=steps
+    )
     solved = [
         [filled[i * n_v + j] for j in range(n_v)] for i in range(n_u)
     ]

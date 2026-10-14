@@ -370,6 +370,61 @@ def _support_reach(support, spine, t: float) -> float:
     return min(distances)
 
 
+def support_cross_second(support, spine, tol: float = 1e-4, step: float = 1e-5):
+    """The support's transverse second-derivative vector and speed at the spine.
+
+    The transverse direction is the support's own cross direction least
+    aligned with the spine's tangent (as `support_fields` picks it). Returns
+    ``(field, ...)`` where the field maps the spine parameter to
+    ``(dd, speed_sq)``: ``dd`` is the second derivative *along the transverse
+    direction's own increasing parameter*, ``speed_sq`` the squared norm of
+    its first derivative there. Direction-even in the second derivative, so
+    no orientation is folded -- that is why a curvature condition needs none
+    (unlike a slope's).
+    """
+    def at(t: float):
+        point = spine.point_at(t)
+        _projected, (u, v) = support.project(point)
+        gap = abs(_projected - point)
+        if gap > tol:
+            raise G1Error(
+                f"the spine misses its support by {gap:.3e} at t={t:.4f} "
+                f"(tol {tol:.1e}) -- wrong support for this curve?"
+            )
+        tangent = spine.tangent_at(t)
+        length = (tangent.x**2 + tangent.y**2 + tangent.z**2) ** 0.5
+        t_hat = (tangent.x / length, tangent.y / length, tangent.z / length)
+        best, best_align = None, 2.0
+        for which, candidate in enumerate(support.tangents_at(u, v)):
+            cl = (candidate.x**2 + candidate.y**2 + candidate.z**2) ** 0.5
+            if cl < 1e-12:
+                continue
+            align = abs(
+                candidate.x * t_hat[0] + candidate.y * t_hat[1] + candidate.z * t_hat[2]
+            ) / cl
+            if align < best_align:
+                best, best_align = which, align
+        if best is None:
+            raise G1Error("the support has no transverse derivative at the spine")
+        if best == 0:
+            first = support.tangents_at(u, v)[0]
+            later = support.tangents_at(u + step, v)[0]
+        else:
+            first = support.tangents_at(u, v)[1]
+            later = support.tangents_at(u, v + step)[1]
+        dd = (
+            (later.x - first.x) / step,
+            (later.y - first.y) / step,
+            (later.z - first.z) / step,
+        )
+        speed_sq = first.x**2 + first.y**2 + first.z**2
+        if speed_sq < 1e-12:
+            raise G1Error("the support's cross derivative vanishes at the spine")
+        return dd, speed_sq
+
+    return at
+
+
 def support_curvature_field(support, spine, towards=None, step: float = 1e-5, tol: float = 1e-4):
     """Normal-section curvature of *support* across its spine.
 
@@ -379,47 +434,14 @@ def support_curvature_field(support, spine, towards=None, step: float = 1e-5, to
     difference of the analytic first derivative.
     """
     at = support_fields(support, spine, towards=towards, tol=tol)
+    second = support_cross_second(support, spine, tol=tol, step=step)
 
     def curvature(t: float) -> float:
-        point = spine.point_at(t)
-        _projected, (u, v) = support.project(point)
-        tangent = spine.tangent_at(t)
-        length = (tangent.x**2 + tangent.y**2 + tangent.z**2) ** 0.5
-        t_hat = (tangent.x / length, tangent.y / length, tangent.z / length)
-        su, sv = support.tangents_at(u, v)
-        candidates = [(0, su), (1, sv)]
-        best = None
-        for which, candidate in candidates:
-            cl = (candidate.x**2 + candidate.y**2 + candidate.z**2) ** 0.5
-            if cl < 1e-12:
-                continue
-            align = abs(
-                candidate.x * t_hat[0] + candidate.y * t_hat[1] + candidate.z * t_hat[2]
-            ) / cl
-            if best is None or align < best[0]:
-                best = (align, which)
-        if best is None:
-            raise G1Error("the support has no transverse derivative at the spine")
-        which = best[1]
         normal, _slope = at(t)
-        if which == 0:
-            first = support.tangents_at(u, v)[0]
-            later = support.tangents_at(u + step, v)[0]
-        else:
-            first = support.tangents_at(u, v)[1]
-            later = support.tangents_at(u, v + step)[1]
-        d = (first.x, first.y, first.z)
-        dd = (
-            (later.x - first.x) / step,
-            (later.y - first.y) / step,
-            (later.z - first.z) / step,
-        )
-        length_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
-        if length_sq < 1e-12:
-            raise G1Error("the support's cross derivative vanishes at the spine")
+        dd, speed_sq = second(t)
         return (
             dd[0] * normal[0] + dd[1] * normal[1] + dd[2] * normal[2]
-        ) / length_sq
+        ) / speed_sq
 
     return curvature
 
@@ -986,6 +1008,57 @@ def grid_edge_slopes(
     return data
 
 
+def grid_edge_curvatures(
+    surface,
+    oriented: Sequence,
+    params_u: Sequence[float],
+    params_v: Sequence[float],
+    edge_normal_fields: dict,
+) -> dict:
+    """The supports' cross-curvature as per-station 3-vectors on the grid.
+
+    Same relationship the G2 rows impose -- ``(d2S/dcross2 . N) ==
+    kappa_support * |S_cross|^2`` -- realized as the *full vector* the plate
+    solve needs: the support's transverse second derivative, scaled from the
+    support's cross-speed to the patch's cross-speed squared. The second
+    derivative is direction-even, so no per-side orientation is folded.
+
+    Call on the same base surface you would call `grid_edge_slopes` with
+    (the coons blend), so the data describes one consistent boundary.
+    """
+    data: dict = {}
+    for edge, field in edge_normal_fields.items():
+        if field is None:
+            continue
+        support = field.get("support") if isinstance(field, dict) else None
+        spine = field.get("spine") if isinstance(field, dict) else None
+        if support is None or spine is None:
+            continue
+        if edge in ("south", "north"):
+            stations = edge_curve_params(oriented, edge, params_u)
+        else:
+            stations = edge_curve_params(oriented, edge, params_v)
+        second = support_cross_second(support, spine)
+        vectors = []
+        for t in stations:
+            dd, support_speed_sq = second(t)
+            if edge == "south":
+                cross = surface.tangents_at(t, 0.0)[1]
+            elif edge == "north":
+                cross = surface.tangents_at(t, 1.0)[1]
+            elif edge == "west":
+                cross = surface.tangents_at(0.0, t)[0]
+            else:
+                cross = surface.tangents_at(1.0, t)[0]
+            speed_sq = cross.x**2 + cross.y**2 + cross.z**2
+            if speed_sq < 1e-12:
+                raise G1Error("the patch's cross derivative vanishes at a station")
+            ratio = speed_sq / support_speed_sq
+            vectors.append((dd[0] * ratio, dd[1] * ratio, dd[2] * ratio))
+        data[edge] = vectors
+    return data
+
+
 def constrained_coons_patch(
     curves: Sequence,
     edge_normal_fields: dict,
@@ -998,6 +1071,7 @@ def constrained_coons_patch(
     tangency: float | None = None,
     g2: bool = False,
     fill: bool = False,
+    g2_in_fill: bool = False,
     parametrization: str = "chord",
 ):
     """P-1 entry point: G1-constrained discrete Coons patch.
@@ -1034,6 +1108,12 @@ def constrained_coons_patch(
                             every G1 edge (curvature continuity), as a second
                             pass over the G1 result. Needs the support and
                             spine in each field spec.
+        g2_in_fill:         put the cross-curvature into the fill solve as
+                            well (an elimination belt on the second ring).
+                            Opt-in only: measured to *regress* the shape for
+                            near-flat supports -- the bend the edge cannot
+                            carry moves one span inward. Kept as exact
+                            machinery for supports with real curvature data.
         corner_stations:    stations dropped at each end of an edge (the
                             corner band, where the boundary curves pin
                             the cross-derivative).
@@ -1062,10 +1142,23 @@ def constrained_coons_patch(
         # built first only because the tangency scaling needs a surface's
         # cross extent. The row passes below then confirm rather than correct.
         slopes = None
+        curvatures = None
         if tangency is not None:
             slopes = grid_edge_slopes(
                 surface, oriented, params_u, params_v, edge_normal_fields, tangency
             )
+        if g2 and g2_in_fill and slopes:
+            # Opt-in only: imposing zero cross-curvature at the edge (flat
+            # ribbons) relocates the roof's own bend to the next span, which
+            # roughens the interior ~2x raw and makes the row pass diverge on
+            # the mixed-height network (dev from twin 0.05 -> 0.90, measured
+            # 2026-10-14). The G2 rows below remain the way curvature match
+            # happens; grid_edge_curvatures is exact machinery kept for
+            # supports whose curvature data genuinely helps. See the plan.
+            raw = grid_edge_curvatures(
+                surface, oriented, params_u, params_v, edge_normal_fields
+            )
+            curvatures = {edge: raw[edge] for edge in sorted(set(slopes) & set(raw))}
         surface, corners = discrete_plate_fill(
             curves,
             nu=nu,
@@ -1074,6 +1167,7 @@ def constrained_coons_patch(
             degree=degree,
             parametrization=parametrization,
             slopes=slopes,
+            curvatures=curvatures,
         )
 
     fixed = solve_g1_constraints(
