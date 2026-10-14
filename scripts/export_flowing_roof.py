@@ -46,7 +46,7 @@ G2 = True
 # interior minimises a discrete plate energy. That is where an energy-minimising
 # CAD fill gets its even curvature, and it is what makes the surface read like
 # the OCCT twin rather than like a flat blend with bent edges.
-FILL = True
+FILL = False  # the plate solve is broken: 40x rougher than the Coons base
 
 # the mixed-height network: the real non-planar G1 stress case
 PARAMS = {
