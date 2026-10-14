@@ -103,22 +103,23 @@ def _basis_and_deriv(u: float, p: int, uflat: Sequence[float]) -> tuple:
     continuation — the slope the surface actually has there), matching
     OCC's endpoint `D1` convention.
     """
-    Nu = _nonzero_row(u, p, uflat)
+    Nu = _nonzero_row(u, p, uflat)  # value row at the exact parameter
     if p == 0:
         return Nu, {i: 0.0 for i in Nu}
     left_limit = uflat[p]
     right_limit = uflat[len(uflat) - p - 1]
     eps = (right_limit - left_limit) * 1e-9 if right_limit > left_limit else 0.0
-    u_eff = u
-    if eps > 0.0:
-        # one-sided derivatives at the clamped ends: right-edge → left
-        # continuation (slope inside the last live span), left-edge → right
-        # continuation (slope inside the first live span).
-        if u >= right_limit:
-            u_eff = right_limit - eps
-        elif u <= left_limit:
-            u_eff = left_limit + eps
-    low = _nonzero_row(u_eff, p - 1, uflat)
+
+    def _limit_point(x: float) -> float:
+        if eps > 0.0:
+            if x >= right_limit:
+                return right_limit - eps
+            if x <= left_limit:
+                return left_limit + eps
+        return x
+
+    # derivative row at the one-sided limit (value row stays exact)
+    low = _nonzero_row(_limit_point(u), p - 1, uflat)
     top = len(uflat) - 1
     ders: dict = {}
     for i in Nu:

@@ -30,13 +30,14 @@ FLOORS: dict[str, tuple[float, str]] = {
     "geometrykit/geometry/biarc.py": (84.0, "M3+ interpolation"),
     "geometrykit/geometry/frames.py": (52.0, "M6 sweep frames"),
     "geometrykit/geometry/subdivision.py": (92.0, "stable"),
-    "geometrykit/geometry/curve.py": (39.0, "M3 interpolation + M4 projection"),
+    "geometrykit/geometry/curve.py": (29.0, "M3: interpolate/assemble in curve_np"),
     "geometrykit/geometry/intersection.py": (36.0, "M5 section walk"),
     "geometrykit/geometry/surface.py": (26.0, "M5 tessellate + sections (tess/clip kernels)"),
     "geometrykit/geometry/spiral.py": (61.0, "M4+ projection"),
     "geometrykit/geometry/transform.py": (61.0, "M6+ loft"),
     "geometrykit/geometry/field.py": (94.0, "M2 landed — gate-free baseline"),
     "geometrykit/contract.py": (92.0, "complete"),
+    "geometrykit/runtimes/_npu/curve_np.py": (0.0, "M3 landed: interpolate"),
     "geometrykit/engine.py": (90.0, "complete"),
 }
 

@@ -71,17 +71,24 @@ def _cox_de_boor(span: int, p: int, u: float, uknots: List[float]) -> List[float
 
 
 def _cox_de_boor_deriv(span: int, p: int, u: float, uknots: List[float]) -> List[float]:
-    """First derivative of the p+1 non‑zero basis functions at *u*."""
-    Np = _cox_de_boor(span, p - 1, u, uknots)
-    dN: List[float] = [0.0] * (p + 1)
-    for i in range(p + 1):
-        j = span - p + i
-        a = uknots[j + p] - uknots[j]
-        b = uknots[j + p + 1] - uknots[j + 1]
-        if i < p:
-            dN[i] = (p / a) * Np[i] if abs(a) > 1e-12 else 0.0
-        if i > 0:
-            dN[i] -= (p / b) * Np[i - 1] if abs(b) > 1e-12 else 0.0
+    """First derivative of the p+1 non‑zero basis functions at *u* (eq. 3.8).
+
+    Difference formula over the degree-(p−1) row; degenerate (repeated
+    clamp) denominators contribute 0 — correct one-sided derivatives at
+    clamped edges. Mirrors ``surface_np._basis_and_deriv`` (the Rust port
+    carries both).
+    """
+    low = _cox_de_boor(span, p - 1, u, uknots)
+    low_ids = [span - (p - 1) + k for k in range(p)]
+    low_map = dict(zip(low_ids, low))
+    dN: List[float] = []
+    for k in range(p + 1):
+        i = span - p + k
+        a = uknots[i + p] - uknots[i] if i + p < len(uknots) else 0.0
+        b = uknots[i + p + 1] - uknots[i + 1] if i + p + 1 < len(uknots) else 0.0
+        t1 = (p * low_map.get(i, 0.0) / a) if abs(a) > 1e-12 else 0.0
+        t2 = (p * low_map.get(i + 1, 0.0) / b) if abs(b) > 1e-12 else 0.0
+        dN.append(t1 - t2)
     return dN
 
 
@@ -262,14 +269,36 @@ class Curve:
     def tangent_at(self, t: float) -> Vec:
         """Evaluate unit tangent at normalised parameter ``t ∈ [0, 1]``.
 
-        Uses central finite differences for robustness at clamped endpoints.
+        Analytic derivative (M3, eq. 3.8 with one-sided clamp continuation)
+        — matches OCC's `D1` endpoint convention; no finite differences.
         """
-        eps = 1e-6 * (self._uknots[-1] - self._uknots[0]) if len(self._uknots) > 1 else 1e-6
-        t0 = max(0.0, t - eps)
-        t1 = min(1.0, t + eps)
-        p0 = self.point_at(t0)
-        p1 = self.point_at(t1)
-        v = (p1 - p0) / (t1 - t0)
+        u = self._u_of_t(t)
+        from geometrykit.runtimes._npu import curve_np
+
+        Nu, dNu = curve_np._basis_and_deriv(u, self.degree, self._uknots)
+        hx = hy = hz = w = 0.0
+        dhx = dhy = dhz = dw = 0.0
+        for i, ni in Nu.items():
+            wi = self._weights[i] if self._weights is not None else 1.0
+            p = self.points[i]
+            h = ni * wi
+            hx += h * p.x
+            hy += h * p.y
+            hz += h * p.z
+            w += h
+            dn = dNu.get(i, 0.0) * wi
+            dhx += dn * p.x
+            dhy += dn * p.y
+            dhz += dn * p.z
+            dw += dn
+        if w == 0.0:
+            return Vec(0, 0, 0)
+        px, py, pz = hx / w, hy / w, hz / w
+        v = Vec(
+            dhx - dw * px,
+            dhy - dw * py,
+            dhz - dw * pz,
+        )
         n = v.normalized()
         return n if n is not None else Vec(0, 0, 0)
 
@@ -759,14 +788,17 @@ class Curve:
     ) -> "Curve":
         """Interpolate a BSpline curve through a set of points.
 
-        Uses OCC ``GeomAPI_Interpolate`` (requires ``pythonocc-core``).
+        Pure kernel (NURBS Book A9.1 / A9.2 end conditions) — no pythonocc
+        needed. The OCC oracle path lives in the test suite.
 
         Args:
             points:    Points the curve must pass through (minimum 2).
             degree:    Target degree (default 3).  Minimum is clamped to
                       ``min(len(points) - 1, 3)``.
-            tan_start: Optional start tangent for G1 end condition.
-            tan_end:   Optional end tangent for G1 end condition.
+            tan_start: Optional start tangent direction for G1 end
+                      condition. The derivative magnitude is the natural
+                      chord one (unscaled convention).
+            tan_end:   Optional end tangent direction for G1 end condition.
             knots:     Optional explicit knot parameters ``∈ [0, 1]``.
                       Length must equal ``len(points)``.  When ``None``
                       chord‑length parameterisation is used.
@@ -774,61 +806,21 @@ class Curve:
         Returns:
             A new ``Curve`` through all *points*.
         """
-        try:
-            from OCC.Core.Geom import Geom_BSplineCurve
-            from OCC.Core.GeomAPI import GeomAPI_Interpolate
-            from OCC.Core.gp import gp_Pnt, gp_Vec
-            from OCC.Core.TColgp import TColgp_HArray1OfPnt
-            from OCC.Core.TColStd import TColStd_HArray1OfReal
-        except ImportError:
-            raise ImportError("Curve.from_points() requires pythonocc-core")
+        from geometrykit.runtimes._npu import curve_np
 
-        n = len(points)
-        if n < 2:
+        if len(points) < 2:
             raise ValueError("Need at least 2 points")
-
-        pts_arr = TColgp_HArray1OfPnt(1, n)
-        for i, p in enumerate(points):
-            pts_arr.SetValue(i + 1, gp_Pnt(p.x, p.y, p.z))
-
-        if knots is not None:
-            if len(knots) != n:
-                raise ValueError(f"knots length ({len(knots)}) must match points ({n})")
-            par_arr = TColStd_HArray1OfReal(1, n)
-            for i, k in enumerate(knots):
-                par_arr.SetValue(i + 1, float(k))
-            interp = GeomAPI_Interpolate(pts_arr, par_arr, False, 1e-6)
-        else:
-            interp = GeomAPI_Interpolate(pts_arr, False, 1e-6)
-
-        if tan_start is not None or tan_end is not None:
-            if tan_start is not None and tan_end is not None:
-                interp.Load(
-                    gp_Vec(tan_start.x, tan_start.y, tan_start.z),
-                    gp_Vec(tan_end.x, tan_end.y, tan_end.z),
-                )
-            elif tan_start is not None:
-                interp.Load(gp_Vec(tan_start.x, tan_start.y, tan_start.z))
-            else:
-                interp.Load(gp_Vec(tan_end.x, tan_end.y, tan_end.z))
-
-        interp.Perform()
-
-        curve = interp.Curve()
-        bspline = Geom_BSplineCurve.DownCast(curve)
-        if bspline is None:
-            raise RuntimeError("GeomAPI_Interpolate did not produce a BSpline")
-
-        poles = [
-            Vec(bspline.Pole(i + 1).X(), bspline.Pole(i + 1).Y(), bspline.Pole(i + 1).Z())
-            for i in range(bspline.NbPoles())
-        ]
-
+        degree_clamped = max(1, min(degree, len(points) - 1))
+        cpts, knots, mults = curve_np.interpolate(
+            points, degree=degree_clamped,
+            tan_start=tan_start, tan_end=tan_end, knots_param=knots,
+        )
         return cls(
-            control_points=poles,
-            knots=[bspline.Knot(i + 1) for i in range(bspline.NbKnots())],
-            multiplicities=[bspline.Multiplicity(i + 1) for i in range(bspline.NbKnots())],
-            degree=bspline.Degree(),
+            control_points=[Vec(*c) for c in cpts],
+            knots=knots,
+            multiplicities=mults,
+            degree=degree_clamped,
+            closed=False,
         )
 
     @classmethod
@@ -839,88 +831,53 @@ class Curve:
     ) -> "List[Curve]":
         """Join end-to-start connected curves into continuous BSpline curves.
 
-        Uses OCC ``GeomConvert_CompCurveToBSplineCurve``.  Curves that
-        are not G0‑connected (gap larger than *tol*) are split into
-        separate groups.
+        Pure kernel: C0 knot-vector assembly via ``curve_np.join_two``
+        (see the plan's M3).  Curves that are not G0-connected (gap larger
+        than *tol*) split into separate groups; orientation is repaired
+        (4-way endpoint matching).  Joined curves within a group must
+        share one degree; groups with mixed degrees stay split.
 
         Args:
-            curves:  Sequence of curves to join (must be G0 at
-                     connections within *tol*).
+            curves:  Sequence of curves to join.
             tol:     G0 tolerance for joining.
 
         Returns:
             List of joined ``Curve`` objects.
         """
-        try:
-            from OCC.Core.GeomConvert import GeomConvert_CompCurveToBSplineCurve
-        except ImportError:
-            raise ImportError("Curve.assemble() requires pythonocc-core") from None
-
-        from geometrykit.geometry.surface import _build_occ_curve, _curve_from_occ_bspline
+        from geometrykit.runtimes._npu import curve_np
 
         if not curves:
             return []
 
-        # ── 1. Orient curves — try all 4 endpoint permutations ─────
-        oriented: list = [curves[0]]
-        groups: list[list] = []
-
-        def _p(pts, i):
-            return pts[i].point_at(0), pts[i].point_at(1)
-
-        for i in range(1, len(curves)):
-            prev_start, prev_end = _p(oriented, -1)
-            curr_start, curr_end = _p(curves, i)
-
-            def _dist(a, b):
-                return (a - b).length()
-
-            fwd = _dist(prev_end, curr_start)  # c0 → c1
-            rev = _dist(prev_end, curr_end)  # c0 → c1⁻¹
-            p_rev = _dist(prev_start, curr_start)  # c0⁻¹ → c1
-            p_rev_r = _dist(prev_start, curr_end)  # c0⁻¹ → c1⁻¹
-
-            if min(fwd, rev, p_rev, p_rev_r) > tol:
-                groups.append(oriented)
-                oriented = [curves[i]]
-                continue
-
-            def _apply(c, fl):
-                return c.reverse() if fl else c
-
-            if fwd <= tol:
-                oriented.append(curves[i])
-            elif rev <= tol:
-                oriented.append(curves[i].reverse())
-            elif p_rev <= tol:
-                oriented[-1] = oriented[-1].reverse()
-                oriented.append(curves[i])
-            else:  # p_rev_r
-                oriented[-1] = oriented[-1].reverse()
-                oriented.append(curves[i].reverse())
-
-        groups.append(oriented)
-
-        # ── 2. Build OCC BSplineJoin for each group ────────────────
-        from OCC.Core.GeomConvert import GeomConvert_CompCurveToBSplineCurve
-
+        groups = curve_np.group_and_orient(curves, tol=tol)
         result: list = []
         for grp in groups:
-            occ = [_build_occ_curve(c) for c in grp]
-            joiner = GeomConvert_CompCurveToBSplineCurve()
-            for oc in occ:
-                joiner.Add(oc, tol)
-            try:
-                joined = joiner.BSplineCurve()
-                result.append(_curve_from_occ_bspline(joined))
-            except Exception:
-                # Join failed — add curves individually
-                for c in grp:
-                    result.append(c)
+            joined = grp[0]
+            ok = True
+            for nxt in grp[1:]:
+                if joined.rational or nxt.rational:
+                    ok = False
+                    break
+                merged = curve_np.join_two(joined, nxt, tol=tol)
+                if merged is None:
+                    ok = False
+                    break
+                cpts, knots, mults = merged
+                joined = cls(
+                    control_points=cpts,
+                    knots=knots,
+                    multiplicities=mults,
+                    degree=joined.degree,
+                    closed=False,
+                )
+            if ok:
+                result.append(joined)
+                continue
+            # degree mismatch (or rationality): emit the group as-is
+            result.extend(grp)
 
         return result
 
-    @classmethod
     def from_occ_edge(cls, edge) -> "Curve":
         """Create a Curve from an OCC ``TopoDS_Edge``.
 
