@@ -24,6 +24,27 @@
   parameter (drawn direction may run opposite to the sampled one). G1
   constraints and their verification probes the same parameters the patch
   was built on.
+- **Symmetric support ribbons** (`Surface.ribbon(..., symmetric=True)`,
+  `patch_g1.support_fields`): the spine runs down the middle of the ribbon,
+  so one support serves a patch on either side of the curve -- which is what
+  a shared ridge needs, and it makes the constraint independent of which way
+  the support was drawn. The rails are offsets of the spine's own control
+  net, so the spine lies *exactly* on the middle line. `support_fields`
+  returns the support's normal and its own slope along the spine, located by
+  projection, so one-sided, symmetric and full supports all work without
+  guessing an edge. `Surface.patch` now hands OCCT's filler the support
+  face's own spine edge (a rebuilt edge that merely coincides with the
+  boundary segfaults `MakeFilling`), bounding the face at the spine when the
+  spine is interior.
+- **Tangency strength** (`patch_g1`, `tangency=` on
+  `solve_g1_constraints` / `constrained_coons_patch`): G1 fixes the tangent
+  plane and leaves the boundary cross-derivative's *magnitude* to the solver,
+  which typically under-delivers against a CAD tangency support. The optional
+  factor names that magnitude as a multiple of the support's own slope,
+  measured per unit distance so it is parameterisation-independent: `1.0`
+  reproduces the support's own rate of departure, higher is stiffer, `None`
+  (default) keeps the previous minimum-norm behaviour. Linear in the factor
+  and G1-exact at every value (measured worst |d . N| 3.4e-08).
 - **Patch export** (`geometrykit/export.py`, `scripts/export_flowing_roof.py`):
   occ-free OBJ (quads) and STL writers, plus an **AP214 STEP** writer that
   emits real `B_SPLINE_SURFACE_WITH_KNOTS` faces -- control net, distinct

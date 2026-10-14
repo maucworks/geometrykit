@@ -12,7 +12,12 @@ exactly when
     d . N = 0.
 
 Only the *direction* of ``d`` is constrained; its magnitude is the patch's
-own free choice. That is what makes the condition linear and cheap.
+own free choice. That is what makes the condition linear and cheap -- and it
+is also the one thing G1 leaves unspecified: how stiffly the patch leaves the
+edge. `solve_g1_constraints` takes an optional ``tangency`` factor for that
+magnitude (see below); without it the magnitude is whatever the
+minimum-norm solve leaves behind, which is typically much softer than a CAD
+system's tangency support.
 
 Where the rows come from
 ------------------------
@@ -84,6 +89,15 @@ def _unit(vec) -> tuple:
     return (x / ln, y / ln, z / ln)
 
 
+def _slope_of(field, t: float):
+    """The support slope carried by a field spec, or None if it has none."""
+    if isinstance(field, dict):
+        slope = field.get("slope")
+        return None if slope is None else slope(t)
+    slope = getattr(field, "slope", None)
+    return None if slope is None else slope(t)
+
+
 def _field_samples(field, params: Sequence[float], corner_stations: int = 1) -> list:
     """Normalize one edge's field into ``[(param, unit_normal), ...]``.
 
@@ -99,6 +113,8 @@ def _field_samples(field, params: Sequence[float], corner_stations: int = 1) -> 
     hi = len(params) - 1 - max(int(corner_stations), 0)
     if hi <= lo:
         raise G1Error("patch has too few stations for a G1 constraint")
+    if isinstance(field, dict):
+        field = field["normal"]
     slots: list = [None] * len(params)
     if callable(field):
         for k, t in enumerate(params):
@@ -194,6 +210,52 @@ def _ridge_solve(rows: list, unknowns: int, ridge: float) -> list:
     return solution
 
 
+def _cross_extent(surface, edge: str, t: float) -> float:
+    """How far the patch reaches across itself at one boundary station."""
+    if edge in ("south", "north"):
+        return abs(surface.point_at(t, 1.0) - surface.point_at(t, 0.0))
+    return abs(surface.point_at(1.0, t) - surface.point_at(0.0, t))
+
+
+def _support_reach(support, spine, t: float) -> float:
+    """How far the support extends from its spine, along the support itself.
+
+    The spine is located on the support by projection; the reach is the
+    shorter of the two distances to the support's edges in that direction.
+    For a symmetric ribbon of width ``w`` that is ``w / 2``, for a one-sided
+    ribbon ``w`` -- which is exactly the span a tangency strength is relative
+    to.
+    """
+    point = spine.point_at(t)
+    _projected, (u, v_spine) = support.project(point)
+    distances = []
+    for v_edge in (0.0, 1.0):
+        try:
+            edge_point = support.point_at(u, v_edge)
+        except Exception:  # pragma: no cover - defensive, parameterisation dependent
+            continue
+        distances.append(abs(edge_point - point))
+    distances = [d for d in distances if d > _EPS]
+    if not distances:
+        raise G1Error("could not measure the support's extent from the spine")
+    return min(distances)
+
+
+def support_constraint(support, spine, towards=None, tol: float = 1e-4) -> dict:
+    """A G1 field spec for one edge, carrying its support and spine.
+
+    Use this instead of a bare normal callable when a tangency strength is
+    wanted: the solver needs the support's own slope and reach to scale it.
+    """
+    at = support_fields(support, spine, towards=towards, tol=tol)
+    return {
+        "normal": lambda t: at(t)[0],
+        "slope": lambda t: at(t)[1],
+        "support": support,
+        "spine": spine,
+    }
+
+
 def solve_g1_constraints(
     surface,
     params_u: Sequence[float],
@@ -201,6 +263,7 @@ def solve_g1_constraints(
     edge_normal_fields: dict,
     ridge: float = 1e-10,
     corner_stations: int = 1,
+    tangency: float | None = None,
 ):
     """P-1: enforce the G1 tangent-plane rows on a P-0 Coons patch.
 
@@ -211,6 +274,14 @@ def solve_g1_constraints(
                             `EDGE_NAMES`; an absent edge stays G0.
         ridge:              relative Tikhonov weight -- ties the under-
                             determined system to the smallest patch change.
+        tangency:           G1 only fixes the *direction* of the boundary
+                            cross-derivative, leaving its magnitude to the
+                            solve. Give a factor to control that magnitude:
+                            ``1.0`` keeps the Coons base's in-plane slope,
+                            larger values leave the edge more stiffly (the
+                            surface pulls away from the tangent plane faster),
+                            smaller values more softly. ``None`` leaves the
+                            minimum-norm magnitude.
 
     Returns:
         A new ``Surface`` with the boundary-adjacent control rows moved into
@@ -250,28 +321,68 @@ def solve_g1_constraints(
     def dot3(a, b) -> float:
         return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 
-    def add_edge_rows(samples, bases, factor, inner_key, outer_key) -> None:
+    def add_edge_rows(samples, bases, factor, inner_key, outer_key, edge, spec) -> None:
         for t, normal in samples:
-            coefs = {}
-            residual = 0.0
+            # the Coons base's own cross-derivative at this station, and the
+            # control points that carry it
+            current = [0.0, 0.0, 0.0]
+            terms = []
             for slot, weight in bases(t):
                 i_slot, j_slot = slot[0], slot[1]
                 inner = net[i_slot][j_slot]
                 outer_i, outer_j = outer_key(i_slot, j_slot)
                 outer = net[outer_i][outer_j]
-                delta = (
-                    inner[0] - outer[0],
-                    inner[1] - outer[1],
-                    inner[2] - outer[2],
-                )
                 coefficient = factor * weight
-                residual += coefficient * dot3(delta, normal)
-                base_index = index.get(inner_key(slot[0], slot[1]))
-                if base_index is None:
-                    continue
                 for comp in range(3):
-                    coefs[base_index + comp] = coefficient * normal[comp]
-            rows.append((coefs, -residual))
+                    current[comp] += coefficient * (inner[comp] - outer[comp])
+                terms.append((index.get(inner_key(i_slot, j_slot)), coefficient))
+
+            if tangency is None:
+                # direction only: the off-plane component must vanish, the
+                # magnitude stays whatever the minimum-norm solve leaves
+                coefs = {}
+                for base_index, coefficient in terms:
+                    if base_index is None:
+                        continue
+                    for comp in range(3):
+                        coefs[base_index + comp] = coefficient * normal[comp]
+                rows.append((coefs, -dot3(current, normal)))
+                continue
+
+            # strength given: aim the cross-derivative at the support's own
+            # slope, scaled so the patch leaves the edge `tangency` times as
+            # fast as the support does. One row per component.
+            slope = _slope_of(spec, t)
+            if slope is None:
+                raise G1Error(
+                    "a tangency strength needs the support's slope: build the "
+                    "fields with patch_g1.support_fields"
+                )
+            slope_length = (
+                slope[0] ** 2 + slope[1] ** 2 + slope[2] ** 2
+            ) ** 0.5
+            if slope_length < _EPS:
+                raise G1Error("the support slope is degenerate at a station")
+            # support slope per unit distance, times the patch's cross extent
+            unit = [slope[comp] / slope_length for comp in range(3)]
+            support = spec.get("support") if isinstance(spec, dict) else None
+            spine = spec.get("spine") if isinstance(spec, dict) else None
+            if support is None or spine is None:
+                raise G1Error(
+                    "a tangency strength needs the support and its spine in the "
+                    "field spec -- build it with patch_g1.support_constraint"
+                )
+            reach = _cross_extent(surface, edge, t)
+            support_reach = _support_reach(support, spine, t)
+            magnitude = tangency * (slope_length / support_reach) * reach
+            target = [magnitude * unit[comp] for comp in range(3)]
+            for comp in range(3):
+                coefs = {}
+                for base_index, coefficient in terms:
+                    if base_index is None:
+                        continue
+                    coefs[base_index + comp] = coefficient
+                rows.append((coefs, target[comp] - current[comp]))
 
     for edge in EDGE_NAMES:
         field = edge_normal_fields.get(edge)
@@ -293,6 +404,8 @@ def solve_g1_constraints(
                 factor,
                 lambda i, j: (i, inner_row),
                 lambda i, j: (i, outer_row),
+                edge,
+                field,
             )
         else:
             samples = _field_samples(field, params_v, corner_stations)
@@ -310,6 +423,8 @@ def solve_g1_constraints(
                 factor,
                 lambda i, j: (inner_col, j),
                 lambda i, j: (outer_col, j),
+                edge,
+                field,
             )
 
     if not rows:
@@ -336,29 +451,28 @@ def solve_g1_constraints(
     )
 
 
-def normal_field_from_support(support, spine, tol: float = 1e-4):
-    """Constraint normals read off a support surface along its spine.
+def support_fields(support, spine, towards=None, tol: float = 1e-4):
+    """The (normal, slope) fields of a support surface along its spine.
 
-    The station is *located on the support by projection*, so the support may
-    be a one-sided ribbon (spine on its boundary), a symmetric ribbon (spine
-    in the middle) or a full support shell -- the caller never has to guess
-    which boundary edge carries the spine. This is the contract a CAD system
-    uses for a tangency support: the spine curve is what the constraint is
-    attached to, and the support supplies the tangent plane there.
+    The normal field is the support's unit normal at the spine -- the G1
+    tangent plane. The slope field is the support's own cross-derivative
+    there, normal component removed and oriented towards *towards*: the rate
+    at which the support itself leaves the tangent plane. That is what a
+    tangency strength is measured against.
 
     Args:
-        support: any `Surface` that carries the constraint plane.
-        spine:   the `Curve` the constraint is attached to (a patch boundary).
+        support: any `Surface` carrying the constraint plane.
+        spine:   the `Curve` the constraint is attached to.
+        towards: a point inside the patch, used to orient the slope.
         tol:     how far the spine may sit off the support before raising.
 
     Returns:
-        A callable ``t -> (nx, ny, nz)`` of the *spine* parameter, giving the
-        unit normal of the support at the projection of ``spine(t)``. Compose
-        it with `patch_np.edge_curve_params` to get a field in patch
-        parameter space.
+        ``(normal_field, slope_field)``, each a callable of the spine
+        parameter. Compose with `patch_np.edge_curve_params` for patch
+        parameter space, or use `support_constraint` for the whole spec.
     """
 
-    def at(t: float) -> tuple:
+    def at(t: float):
         point = spine.point_at(t)
         projected, (u, v) = support.project(point)
         gap = abs(projected - point)
@@ -368,9 +482,45 @@ def normal_field_from_support(support, spine, tol: float = 1e-4):
                 f"(tol {tol:.1e}) -- wrong support for this curve?"
             )
         normal = support.normal_at(u, v)
-        return _unit((normal.x, normal.y, normal.z))
+        n = _unit((normal.x, normal.y, normal.z))
+        tangent = spine.tangent_at(t)
+        length = (tangent.x**2 + tangent.y**2 + tangent.z**2) ** 0.5
+        t_hat = (tangent.x / length, tangent.y / length, tangent.z / length)
+
+        # the transverse derivative: the one least aligned with the spine
+        best, best_align = None, 2.0
+        for candidate in support.tangents_at(u, v):
+            cl = (candidate.x**2 + candidate.y**2 + candidate.z**2) ** 0.5
+            if cl < 1e-12:
+                continue
+            align = abs(
+                candidate.x * t_hat[0] + candidate.y * t_hat[1] + candidate.z * t_hat[2]
+            ) / cl
+            if align < best_align:
+                best, best_align = candidate, align
+        if best is None:
+            raise G1Error("the support has no transverse derivative at the spine")
+
+        # strip the normal component, orient towards the patch
+        along = best.x * n[0] + best.y * n[1] + best.z * n[2]
+        slope = (best.x - along * n[0], best.y - along * n[1], best.z - along * n[2])
+        if towards is not None:
+            inward = (towards.x - point.x, towards.y - point.y, towards.z - point.z)
+            if slope[0] * inward[0] + slope[1] * inward[1] + slope[2] * inward[2] < 0.0:
+                slope = (-slope[0], -slope[1], -slope[2])
+        return n, slope
 
     return at
+
+
+def normal_field_from_support(support, spine, tol: float = 1e-4):
+    """The normal field alone -- a shorthand for `support_fields`."""
+    at = support_fields(support, spine, tol=tol)
+
+    def normal_at(t: float) -> tuple:
+        return at(t)[0]
+
+    return normal_at
 
 
 def constrained_coons_patch(
@@ -382,6 +532,7 @@ def constrained_coons_patch(
     degree: int = 3,
     ridge: float = 1e-10,
     corner_stations: int = 1,
+    tangency: float | None = None,
 ):
     """P-1 entry point: G1-constrained discrete Coons patch.
 
@@ -396,6 +547,11 @@ def constrained_coons_patch(
         tol:                corner coincidence tolerance.
         degree:             tensor-interpolation degree.
         ridge:              relative Tikhonov weight of the G1 solve.
+        tangency:           optional tangency strength -- the magnitude of the
+                            boundary cross-derivative, as a factor on the
+                            Coons base's in-plane slope (``1.0`` keeps it,
+                            higher is stiffer). ``None`` leaves it to the
+                            minimum-norm solve.
         corner_stations:    stations dropped at each end of an edge (the
                             corner band, where the boundary curves pin
                             the cross-derivative).
@@ -414,5 +570,6 @@ def constrained_coons_patch(
         edge_normal_fields,
         ridge=ridge,
         corner_stations=corner_stations,
+        tangency=tangency,
     )
     return fixed, corners, (params_u, params_v)
