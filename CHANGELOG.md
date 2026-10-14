@@ -5,6 +5,12 @@
 
 # v0.2.0 — 2026-10-14
 
+- **Patch kernel P-0** (plan: OCC-exit §5): `Surface.patch` with position-only
+  constraints routes to the occ-free discrete Coons kernel (`runtimes/_npu/patch_np.py`): exact corner pass-through, station-exact
+  boundaries, coplanar-reflexive G1. Continuity-constrained patches
+  (G1 + supports) keep the OCCT route until P-1 (sampled cross-field
+  constraint rows) lands. Flowing-roof standalone example ported into
+  `examples/` as the stress case (7 curves, 6 corners, stages documented).
 - Spline-cage data model (contract v0.1): `CoordinateSystem` (placed
   Cartesian frame: position + Hamilton quaternion, canonical sign `qw ≥ 0`,
   XY plane = planarity plane for cage tangents) and `Corner` (associates a

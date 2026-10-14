@@ -625,6 +625,26 @@ class Surface:
         if n < 2:
             raise ValueError("patch() requires at least 2 curves")
 
+        # Route: pure position-only patches (P-0 discrete Coons, occ-free)
+        # vs continuity-constrained patches (P-1; OCCT twin until the P-1
+        # sampled cross-field kernel lands).
+        constraints = list(constraints) if constraints is not None else ["C0"] * n
+        _needs_g1 = any(
+            (c or "C0").upper() == "G1" for c in constraints
+        )
+        if not _needs_g1 and supports is None:
+            if n == 4:
+                from geometrykit.runtimes._npu import patch_np
+
+                surface, _corners = patch_np.discrete_coons_patch(
+                    curves, tol=1e-6, degree=3
+                )
+                return surface
+            raise NotImplementedError(
+                "pure patch supports exactly four boundary curves for now "
+                "(n-sided chart machinery is a later increment)"
+            )
+
         # Auto‑align to a closed loop: curve[i].end ≈ curve[i+1].start
         curves = list(curves)
         eps = 1e-4
