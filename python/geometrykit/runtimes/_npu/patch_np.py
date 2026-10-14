@@ -41,6 +41,36 @@ def _sample(curve, params: Sequence[float], reverse: bool) -> list:
     return [curve.point_at(t) for t in params]
 
 
+def _arclength_stations(curve, count: int, rev: bool, samples: int = 400) -> list:
+    """Parameters of *curve* at equal arc-length fractions.
+
+    In the curve's own parameterisation (the drawn direction is accounted for),
+    one per patch station, so the grid samples the curve directly and a
+    constraint field maps back onto it.
+    """
+
+    def forward(t: float):
+        return curve.point_at(1.0 - t) if rev else curve.point_at(t)
+
+    ts = [i / samples for i in range(samples + 1)]
+    points = [forward(t) for t in ts]
+    cumulative = [0.0]
+    for i in range(1, len(points)):
+        cumulative.append(cumulative[-1] + abs(points[i] - points[i - 1]))
+    total = cumulative[-1]
+    stations = []
+    cursor = 0
+    for k in range(count + 1):
+        target = total * k / count
+        while cursor < len(cumulative) - 2 and cumulative[cursor + 1] < target:
+            cursor += 1
+        span = cumulative[cursor + 1] - cumulative[cursor]
+        fraction = 0.0 if span <= 1e-15 else (target - cumulative[cursor]) / span
+        t = ts[cursor] + fraction * (ts[cursor + 1] - ts[cursor])
+        stations.append(1.0 - t if rev else t)
+    return stations
+
+
 def _match_between(a: tuple, b: tuple, tol: float) -> bool:
     return abs(a - b) < tol
 
@@ -137,54 +167,104 @@ def _comp_corn(c00, c10, c01, c11, a: float, b: float) -> tuple:
     ]
 
 
-def coons_parametrization(curves: Sequence, nu: int = 8, nv: int = 8, tol: float = 1e-6):
+def coons_parametrization(
+    curves: Sequence,
+    nu: int = 8,
+    nv: int = 8,
+    tol: float = 1e-6,
+    parametrization: str = "chord",
+):
     """The station parameters the Coons patch is built on.
 
-    Returns ``(params_u, params_v, oriented)`` -- the chord parameters on
-    the oriented south (u) and east (v) boundaries, plus the orientation
-    sheet from `orient_cycle`. The u/v stations double as the sampling
-    stations of the north/west boundaries, so a caller holding a field in
-    *curve* parameter space maps it into patch space with
-    `edge_curve_params`.
+    Returns ``(params_u, params_v, oriented)``. ``oriented[edge]`` is
+    ``(curve, stations)``: the curve, and for every patch station the parameter
+    at which to sample it -- so a constraint field maps from patch parameter
+    space back onto the curve with `edge_curve_params`, and the invariant
+    ``surface.point_at(params[i], edge) == curve.point_at(stations[i])`` holds.
+
+    ``parametrization`` decides how the stations are spread:
+
+    - ``"chord"`` (default): the curve is sampled at uniform parameter, so the
+      patch parameters are the chord lengths between those samples and the
+      patch parameterisation *is* the curve's own. The spacing then follows the
+      curve's speed, which for a Bezier with long end handles means stations
+      bunched in the middle and wide at the ends.
+    - ``"arclength"``: equal arc length, so the stations are evenly spread in
+      space and the parameters are uniform. Paired with uniform knots (see
+      `discrete_coons_patch`), the Greville abscissae are uniform too, which is
+      what keeps the control net evenly spaced and the boundary derivative
+      scaling constant.
     """
     oriented = orient_cycle(curves, tol=tol)
     south_curve, south_rev = oriented["south"]
     east_curve, east_rev = oriented["east"]
-    south_fwd = _sample(south_curve, [i / nu for i in range(nu + 1)], south_rev)
-    params_u = chord_params(south_fwd)
-    east_fwd = _sample(east_curve, [j / nv for j in range(nv + 1)], east_rev)
-    params_v = chord_params(east_fwd)
-    return params_u, params_v, oriented
+    if parametrization == "arclength":
+        params_u = [i / nu for i in range(nu + 1)]
+        params_v = [j / nv for j in range(nv + 1)]
+    elif parametrization == "chord":
+        south_fwd = _sample(south_curve, [i / nu for i in range(nu + 1)], south_rev)
+        params_u = chord_params(south_fwd)
+        east_fwd = _sample(east_curve, [j / nv for j in range(nv + 1)], east_rev)
+        params_v = chord_params(east_fwd)
+    else:
+        raise PatchError(
+            f"unknown parametrization {parametrization!r}: use 'chord' or 'arclength'"
+        )
+
+    sheet = {}
+    for name in ("south", "east", "north", "west"):
+        curve, rev = oriented[name]
+        count = nu if name in ("south", "north") else nv
+        params = params_u if name in ("south", "north") else params_v
+        if parametrization == "arclength":
+            sheet[name] = (curve, _arclength_stations(curve, count, rev))
+        else:
+            sheet[name] = (curve, [1.0 - p if rev else p for p in params])
+    sheet["corners"] = oriented["corners"]
+    return params_u, params_v, sheet
 
 
 def edge_curve_params(oriented: dict, edge: str, patch_params: Sequence[float]) -> list:
     """Map patch-space station params onto one edge's own curve parameter.
 
-    Returns the parameter on the edge curve at which each patch-space
-    station sits -- accounting for a drawn direction that runs opposite
-    to the patch's sampled direction.
+    ``edge_curve_params(oriented, "north", params_u)[i]`` is the parameter on
+    the north curve at which the i-th u-station sits. The station map already
+    accounts for a drawn direction that runs opposite to the patch's sampled
+    one, and for the parameterisation choice.
     """
-    _curve, rev = oriented[edge]
+    entry = oriented[edge]
+    if len(entry) == 2:
+        _curve, stations = entry
+        return list(stations)
+    _curve, rev = entry
     if rev:
         return [1.0 - p for p in patch_params]
     return list(patch_params)
 
 
-def discrete_coons_grid(curves: Sequence, nu: int = 8, nv: int = 8, tol: float = 1e-6):
+def discrete_coons_grid(
+    curves: Sequence,
+    nu: int = 8,
+    nv: int = 8,
+    tol: float = 1e-6,
+    parametrization: str = "chord",
+):
     """Sample the four boundaries onto the discrete Coons grid.
 
     Returns ``(grid, params_u, params_v, corners)`` — grid[i][j] = (x, y, z).
     """
-    params_u, params_v, orient = coons_parametrization(curves, nu=nu, nv=nv, tol=tol)
+    params_u, params_v, orient = coons_parametrization(
+        curves, nu=nu, nv=nv, tol=tol, parametrization=parametrization
+    )
     south_curve, south_rev = orient["south"]
     east_curve, east_rev = orient["east"]
     north_curve, north_rev = orient["north"]
     west_curve, west_rev = orient["west"]
 
-    Su = _sample(south_curve, params_u, south_rev)
-    Sn = _sample(north_curve, params_u, north_rev)
-    Se = _sample(east_curve, params_v, east_rev)
-    Sw = _sample(west_curve, params_v, west_rev)
+    Su = [south_curve.point_at(t) for t in orient["south"][1]]
+    Sn = [north_curve.point_at(t) for t in orient["north"][1]]
+    Se = [east_curve.point_at(t) for t in orient["east"][1]]
+    Sw = [west_curve.point_at(t) for t in orient["west"][1]]
 
     corners = orient["corners"]
 
@@ -209,7 +289,7 @@ def discrete_coons_grid(curves: Sequence, nu: int = 8, nv: int = 8, tol: float =
     return grid, params_u, params_v, corners
 
 
-def _interp_1d_vec(values: list, params: list, q: int):
+def _interp_1d_vec(values: list, params: list, q: int, uniform_knots: bool = False):
     """A9.1 interpolation of Vec-value records along one direction.
 
     Returns ``(cps, knots, mults)`` — cps as plain component tuples.
@@ -227,7 +307,12 @@ def _interp_1d_vec(values: list, params: list, q: int):
         # span about twice the first station gap, which is what crowds the
         # control net away from the boundary (see the parameterisation note in
         # the module docstring).
-        flat += averaged_inner_knots(params[: inner + q], q, inner, window_offset=0)
+        if uniform_knots:
+            # uniform clamped knots, spacing 1/(inner+1): pairs with uniform
+            # parameters so the Greville abscissae are uniform too
+            flat += [j / (inner + 1) for j in range(1, inner + 1)]
+        else:
+            flat += averaged_inner_knots(params[: inner + q], q, inner, window_offset=0)
     flat += [1.0] * (q + 1)
 
     rows = []
@@ -252,6 +337,7 @@ def discrete_coons_patch(
     nv: int = 8,
     tol: float = 1e-6,
     degree: int = 3,
+    parametrization: str = "chord",
 ):
     """P-0: four-boundary discrete Coons patch as a tensor NURBS `Surface`.
 
@@ -266,17 +352,24 @@ def discrete_coons_patch(
     """
     from geometrykit.geometry.surface import Surface
 
-    grid, params_u, params_v, corners = discrete_coons_grid(curves, nu=nu, nv=nv, tol=tol)
+    grid, params_u, params_v, corners = discrete_coons_grid(
+        curves, nu=nu, nv=nv, tol=tol, parametrization=parametrization
+    )
     n_u = len(params_u)
     n_v = len(params_v)
     qu = max(1, min(degree, nu))
     qv = max(1, min(degree, nv))
+    # uniform parameters pair with uniform knots; chord parameters need the
+    # averaged knots (the interpolation is only solvable with those there)
+    uniform_knots = parametrization == "arclength"
 
     # step 1: interpolate each grid COLUMN j along u — intermediate columns
     per_col = []
     for j in range(n_v):
         vals = [tuple(grid[i][j]) for i in range(n_u)]
-        cps, knots_u, mults_u = _interp_1d_vec(vals, params_u[: n_u], qu)
+        cps, knots_u, mults_u = _interp_1d_vec(
+            vals, params_u[: n_u], qu, uniform_knots=uniform_knots
+        )
         per_col.append((cps, knots_u, mults_u))
     knots_u, mults_u = per_col[0][1], per_col[0][2]
     n_u_slots = len(per_col[0][0])
@@ -286,7 +379,9 @@ def discrete_coons_patch(
     knots_v = mults_v = None
     for i in range(n_u_slots):
         col = [per_col[j][0][i] for j in range(n_v)]
-        cps_i, kv, mv = _interp_1d_vec(col, params_v[: n_v], qv)
+        cps_i, kv, mv = _interp_1d_vec(
+            col, params_v[: n_v], qv, uniform_knots=uniform_knots
+        )
         net_rows.append([Vec(*p) for p in cps_i])
         knots_v, mults_v = kv, mv
 

@@ -928,6 +928,7 @@ def constrained_coons_patch(
     g2: bool = False,
     fill: bool = False,
     constraint_weight: float = 1e4,
+    parametrization: str = "chord",
 ):
     """P-1 entry point: G1-constrained discrete Coons patch.
 
@@ -954,6 +955,10 @@ def constrained_coons_patch(
                             energy under the continuity constraints.
         constraint_weight:  how hard the continuity constraints press against
                             that energy (default 1e4).
+        parametrization:    how the patch stations are spread -- ``"chord"``
+                            (the curve's own parameterisation) or
+                            ``"arclength"`` (even in space, uniform knots).
+                            See `patch_np.coons_parametrization`.
         g2:                 also match the support's cross-curvature across
                             every G1 edge (curvature continuity), as a second
                             pass over the G1 result. Needs the support and
@@ -967,8 +972,12 @@ def constrained_coons_patch(
         corner sheet, and ``(params_u, params_v)`` so callers can probe the
         patch at the very stations the constraints were placed on.
     """
-    surface, corners = discrete_coons_patch(curves, nu=nu, nv=nv, tol=tol, degree=degree)
-    params_u, params_v, _oriented = coons_parametrization(curves, nu=nu, nv=nv, tol=tol)
+    surface, corners = discrete_coons_patch(
+        curves, nu=nu, nv=nv, tol=tol, degree=degree, parametrization=parametrization
+    )
+    params_u, params_v, _oriented = coons_parametrization(
+        curves, nu=nu, nv=nv, tol=tol, parametrization=parametrization
+    )
     if fill:
         # Two stages, deliberately: first the plate problem on its own --
         # boundary rows fixed (they interpolate the boundary curves exactly),
