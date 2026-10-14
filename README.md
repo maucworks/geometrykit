@@ -22,12 +22,17 @@ spec).
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/pytest tests/ -q                       # full suite (plain env)
-# oracle-inclusive run + staged coverage ladder (needs pythonocc-core):
-/opt/miniconda3/envs/a320-ifc-configurator/bin/python -m pytest tests/ --cov -q
-/opt/miniconda3/envs/a320-ifc-configurator/bin/python -m coverage json -o /tmp/geometrykit-cov.json
+
+# oracle tier: the tests that check the kernel against OCCT
+conda env create -f environment.yml              # once
+conda run -n geometrykit-oracle python -m pytest tests/ -q
+# with coverage + the staged ladder:
+conda run -n geometrykit-oracle python -m pytest tests/ --cov -q
+conda run -n geometrykit-oracle python -m coverage json -o /tmp/geometrykit-cov.json
 python scripts/coverage_ladder.py /tmp/geometrykit-cov.json
 # corpus refresh (A320 demos → tests/fixtures/corpus/):
-/opt/miniconda3/envs/a320-ifc-configurator/bin/python scripts/capture_corpus.py
+# where ifckit is importable (its own environment, not the oracle one):
+python scripts/capture_corpus.py
 ```
 
 Layers: `tests/geometry/` (ported ifckit geometry suite), `tests/test_contract.py`

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-# Suite runs from any interpreter (a320 conda env included) without an
+# Suite runs from any interpreter (any env with pythonocc included) without an
 # editable install: put the package dir (repo root /python) on sys.path.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _PKG = _REPO_ROOT / "python"

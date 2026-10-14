@@ -1,9 +1,10 @@
 # This file was generated with the assistance of an AI coding tool.
 """Capture the A320 demo corpus as geometrykit contract fixtures.
 
-Run where ifckit and its dependencies are importable (the a320 conda env):
+Run where ifckit and its dependencies are importable (ifckit's own
+environment -- this is not the geometrykit-oracle one, which has no ifckit):
 
-    /opt/miniconda3/envs/a320-ifc-configurator/bin/python scripts/capture_corpus.py
+    python scripts/capture_corpus.py
 
 Executes selected demo projects through the same code path the configurator
 uses (ast-parsed INPUTS + run(**inputs)), and snapshots every element dict
@@ -73,7 +74,7 @@ def main() -> None:
     out_dir = ROOT / "tests" / "fixtures" / "corpus"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Reuse the A320 backend's Pending-to-dict serializer (a320 env has fastapi).
+    # Reuse the configurator backend's Pending-to-dict serializer (needs fastapi).
     ser_path = A320_BACKEND_SRC / "routes" / "projects.py"
     sspec = importlib.util.spec_from_file_location("a320_projects_serialize", str(ser_path))
     assert sspec is not None and sspec.loader is not None

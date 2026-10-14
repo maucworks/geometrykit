@@ -2,7 +2,7 @@
 """Coverage ladder — per-module floors that ratchet with the OCC-exit milestones.
 
 Run after a coverage-producing pytest session in the environment that matches
-the run (the a320 conda env for oracle-inclusive numbers):
+the run (the geometrykit-oracle env for oracle-inclusive numbers):
 
     pytest tests/ --cov -q
     python -m coverage json -o /tmp/geometrykit-cov.json

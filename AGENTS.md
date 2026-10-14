@@ -56,6 +56,12 @@ is in **English**.
 ## Testing
 
 - `python3 -m venv .venv && pip install -e ".[dev]"; pytest tests/ -q`
+- **Oracle tier:** `conda env create -f environment.yml` then
+  `conda run -n geometrykit-oracle python -m pytest tests/ -q`. That
+  environment exists only for the tests that check the kernel against OCCT
+  (`pythonocc-core` is conda-only); it is deliberately separate from the
+  plain venv and from any other project's environment. Recreate it with
+  `conda env update -f environment.yml --prune` when the pins move.
 - **Generated results and scratch work go in the gitignored `wip/`
   directory** -- exported STEP/OBJ/STL, viewer pages, sample outputs, anything
   meant to be looked at rather than committed. Library tests stay in
