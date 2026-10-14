@@ -364,6 +364,16 @@ def plate_fill(
     on that side. When two sides' elimination belts overlap (only on tiny
     grids), the west/east claims win.
 
+    The claim mechanism is also available to callers directly: the
+    ``slopes``/``curvatures`` data compile into *claims* -- substitution
+    rules stating that one grid point is a linear function of others plus a
+    constant. The assembly reduces the system by those claims (`P^T A P`
+    over the substitution map). Claims may chain (a substituted point that
+    references a substituted point) and may take the general form
+    ``(weights, additive)`` -- that is how an interior derivative line (a
+    G1 condition on a station line inside the domain, the loose fill's
+    through-the-edge solve) enters the same precise reduction.
+
     Returns the filled grid with the boundary ring untouched.
     """
     stride = ny + 1
@@ -486,11 +496,21 @@ def plate_fill(
             if claim is None:
                 weights[p] = weights.get(p, 0.0) + w
                 continue
-            inner, edge_point, kappa, step_sq = claim
-            stack.append((inner, 2.0 * w))
-            v = _value(edge_point)
-            for comp in range(3):
-                additive[comp] += w * (-v[comp] + step_sq * kappa[comp])
+            if isinstance(claim, tuple) and len(claim) == 4:
+                # the curvature-belt form: 2*inner - edge + step^2*kappa
+                inner, edge_point, kappa, step_sq = claim
+                stack.append((inner, 2.0 * w))
+                v = _value(edge_point)
+                for comp in range(3):
+                    additive[comp] += w * (-v[comp] + step_sq * kappa[comp])
+            else:
+                # the general form: (weights dict, additive 3-vector); nested
+                # claimed points inside the weights resolve transitively
+                sub_weights, sub_add = claim
+                for q, weight in sub_weights.items():
+                    stack.append((q, w * weight))
+                for comp in range(3):
+                    additive[comp] += w * sub_add[comp]
         return weights, (additive[0], additive[1], additive[2])
 
     n = len(reduced)
@@ -533,12 +553,22 @@ def plate_fill(
     out = list(values)
     for k, (i, j) in enumerate(reduced):
         out[i * stride + j] = (solution[0][k], solution[1][k], solution[2][k])
-    for (i, j), (inner, edge_point, kappa, step_sq) in claimed.items():
-        base = out[inner[0] * stride + inner[1]]
-        edge = out[edge_point[0] * stride + edge_point[1]]
-        out[i * stride + j] = (
-            2.0 * base[0] - edge[0] + step_sq * kappa[0],
-            2.0 * base[1] - edge[1] + step_sq * kappa[1],
-            2.0 * base[2] - edge[2] + step_sq * kappa[2],
-        )
+    for (i, j), claim in claimed.items():
+        if isinstance(claim, tuple) and len(claim) == 4:
+            inner, edge_point, kappa, step_sq = claim
+            base = out[inner[0] * stride + inner[1]]
+            edge = out[edge_point[0] * stride + edge_point[1]]
+            out[i * stride + j] = (
+                2.0 * base[0] - edge[0] + step_sq * kappa[0],
+                2.0 * base[1] - edge[1] + step_sq * kappa[1],
+                2.0 * base[2] - edge[2] + step_sq * kappa[2],
+            )
+        else:
+            weights, additive = claim
+            value = [additive[0], additive[1], additive[2]]
+            for q, weight in weights.items():
+                base = out[q[0] * stride + q[1]]
+                for comp in range(3):
+                    value[comp] += weight * base[comp]
+            out[i * stride + j] = tuple(value)
     return out
