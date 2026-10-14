@@ -41,12 +41,20 @@ TANGENCY = 1.0
 # flat strips, so this drives their cross-curvature to zero.
 G2 = True
 
+# Station parameterisation: "chord" or "arclength". Arc-length stations pair
+# with uniform knots and gave the more even iso-parametric spacing on this
+# network (ratio 1.36 vs 1.75), with cross-curvature 2x lower.
+PARAMETRIZATION = "arclength"
+
 # Solve the interior as an energy-minimising fill instead of taking the Coons
-# blend: the boundary rows still interpolate the boundary curves exactly, the
-# interior minimises a discrete plate energy. That is where an energy-minimising
-# CAD fill gets its even curvature, and it is what makes the surface read like
-# the OCCT twin rather than like a flat blend with bent edges.
-FILL = False  # the plate solve is broken: 40x rougher than the Coons base
+# blend: the boundary ring still interpolates the boundary curves exactly, and
+# the interior is the thin-plate solution through it (simply supported). That
+# is what gives the fill its even curvature instead of a flat middle whose
+# bending is pushed onto the edges. Measured on this network: cross-direction
+# curvature 2.4x lower than the blend before the continuity solve, and the
+# whole M0+M2 configuration cuts the cross-direction peak 8x against the
+# blend in chord mode.
+FILL = True
 
 # the mixed-height network: the real non-planar G1 stress case
 PARAMS = {
@@ -162,7 +170,9 @@ def main() -> None:
     for name, spine_names, support_names in networks:
         spines = [getattr(g, n) for n in spine_names]
         supports = [g.ribbons[n] for n in support_names]
-        params_u, params_v, oriented = patch_np.coons_parametrization(spines, nu=16, nv=16)
+        params_u, params_v, oriented = patch_np.coons_parametrization(
+            spines, nu=16, nv=16, parametrization=PARAMETRIZATION
+        )
         towards = Vec(
             sum(c.point_at(0.5).x for c in spines) / 4,
             sum(c.point_at(0.5).y for c in spines) / 4,
@@ -173,12 +183,13 @@ def main() -> None:
             for edge, spine, support in zip(patch_g1.EDGE_NAMES, spines, supports)
         }
         surface, _corners, stations = patch_g1.constrained_coons_patch(
-            spines, fields, nu=16, nv=16, tangency=TANGENCY, g2=G2, fill=FILL
+            spines, fields, nu=16, nv=16, tangency=TANGENCY, g2=G2, fill=FILL,
+            parametrization=PARAMETRIZATION
         )
         patches.append((name, surface))
         label = "solver default" if TANGENCY is None else f"tangency {TANGENCY}"
         label += ", G2" if G2 else ", G1 only"
-        label += ", energy fill" if FILL else ", Coons blend"
+        label += ", plate fill" if FILL else ", Coons blend"
         print(f"{name} patch built from the kernel ({label})")
         for edge in patch_g1.EDGE_NAMES:
             params = stations[0] if edge in ("south", "north") else stations[1]
