@@ -34,7 +34,9 @@ from geometrykit.runtimes._npu import patch_g1, patch_np  # noqa: E402
 # Tangency strength: how stiffly the patches leave their edges, as a multiple
 # of the support ribbons' own slope (1.0 = the ribbon's rate, None = the
 # solver's minimum-norm leftover, which is softer). Dial this and re-run.
-TANGENCY = 1.0
+TANGENCY = 0.75  # the variant the user's eye accepted over 1.0; the
+# band/core curvature metric disagrees (2.1x vs 1.3x) -- the metric lost
+# this one and the eye won
 
 # Also match the ribbons' *curvature* across each edge (G2): the patches stop
 # bending away from the ribbon's plane as they leave the edge. The ribbons are
