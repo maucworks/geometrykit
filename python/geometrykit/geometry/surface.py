@@ -175,11 +175,38 @@ class Surface:
     def point_at(self, u: float, v: float) -> Vec:
         """Evaluate surface point at ``(u, v)`` — both in ``[0, 1]``.
 
-        Requires ``pythonocc-core``.
+        Pure kernel path (``runtimes/_npu``, M2): no pythonocc needed.
         """
-        from geometrykit.geometry.surface import occ_eval_point
+        from geometrykit.runtimes._npu import surface_np
 
-        return occ_eval_point(self, u, v)
+        p = surface_np.eval_point(self, u, v)
+        return Vec(p.x, p.y, p.z)
+
+    def tangents_at(self, u: float, v: float) -> "tuple[Vec, Vec]":
+        """Analytic first-order derivatives ``(dS/du, dS/dv)`` at ``(u, v)``."""
+        from geometrykit.runtimes._npu import surface_np
+
+        su, sv = surface_np.eval_tangents(self, u, v)
+        return Vec(su.x, su.y, su.z), Vec(sv.x, sv.y, sv.z)
+
+    def normal_at(self, u: float, v: float) -> Vec:
+        """Unit normal at ``(u, v)`` (cross of the analytic tangents; kernel path)."""
+        from geometrykit.runtimes._npu import surface_np
+
+        n = surface_np.eval_normal(self, u, v)
+        return Vec(n.x, n.y, n.z)
+
+    def project(
+        self, pt: Vec, m: int = 6, n: int = 6, iters: int = 40
+    ) -> "tuple[Vec, tuple[float, float]]":
+        """Closest surface point to ``pt``: ``(proj, (u, v))`` (kernel Newton).
+
+        ``occ_project_point`` remains available as the OCCT oracle for tests.
+        """
+        from geometrykit.runtimes._npu import surface_np
+
+        p, uv = surface_np.project_point(self, pt, m=m, n=n, iters=iters)
+        return Vec(p.x, p.y, p.z), uv
 
     def to_mesh_dict(
         self,

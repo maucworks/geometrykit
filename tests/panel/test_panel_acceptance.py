@@ -2,11 +2,9 @@
 """Panelization acceptance runs (plan M2 gate).
 
 The panelization domain (`trim_grid`, `crossing_grid`, `hankin_cells`,
-`_project_uv`) must run **without** the `require_occ` gate once the
-occ-free evaluation core lands (M2). Until then these tests document the
-gate: OCC present → they exercise the OCC path; OCC absent → strict skip
-(NOT a silent pass — the plan's acceptance is measured against the
-committed corpus).
+`_project_uv`) runs **without** the `require_occ` gate since M2: the
+these-tests layer runs in any environment (OCC or not) and the corpus
+fixtures are the ground truth.
 """
 
 from __future__ import annotations
@@ -17,32 +15,35 @@ from ..oracle import requires_occ
 
 
 class TestPanelAcceptance:
+    @staticmethod
+    def _demo_surface():
+        from geometrykit.geometry.primitives import Vec
+        from geometrykit.geometry.surface import Surface
+
+        cps = [[Vec(0, 0, 0), Vec(0, 4, 0)], [Vec(8, 0, 0), Vec(8, 4, 0)]]
+        return Surface(cps, [0, 1], [0, 1], [2, 2], [2, 2], 1, 1)
+
     def test_field_module_importable_occ_free(self):
-        """M1 acceptance: field/patterns import without OCC installed."""
+        """field/patterns import without OCC installed."""
         from geometrykit.geometry import field, patterns  # noqa: F401
 
         assert field is not None
 
-    @pytest.mark.xfail(
-        reason="M2 pending: require_occ gates still present in field/patterns",
-        strict=False,
-    )
     def test_field_module_occ_free_run(self):
-        """M2 acceptance: trim_grid runs occ-free on the corpus once the gate is lifted."""
-        from geometrykit.geometry import field  # noqa: F401
+        """M2 acceptance: trim_grid/crossing_grid/hankin run occ-free."""
+        from geometrykit.geometry.field import crossing_grid, trim_grid
+        from geometrykit.geometry.patterns import hankin_cells
 
-        assert True
+        face = self._demo_surface()
+        f = trim_grid(face, spacing=1.0)
+        assert f.cells, "trim_grid produced no cells"
+        g = crossing_grid([face, face], spacing=1.0, shared=[(0, 1)])
+        assert g.cells, "crossing_grid produced no cells"
+        cells = hankin_cells(f, faces=[face], theta_deg=60.0)
+        assert cells and len(cells[0]) in (4, 3), cells[0] if cells else None
 
-    @requires_occ
-    def test_trim_grid_matches_occ_path(self, corpus):
-        pytest.importorskip("geometrykit.geometry.field")
-
-    @pytest.mark.xfail(
-        reason="M2 pending: require_occ gates still present in field/patterns",
-        strict=False,
-    )
     def test_gone_occ_gates_documented(self):
-        """[xfail until M2] The require_occ gate count in field/patterns reaches zero by M2."""
+        """M2 acceptance (landed): field/patterns carry no require_occ gates."""
         import inspect
 
         from geometrykit.geometry import field, patterns
@@ -51,6 +52,8 @@ class TestPanelAcceptance:
         for mod in (field, patterns):
             src = inspect.getsource(mod)
             gates += src.count("require_occ")
-        # xfail(non-strict): trips to XPASS (and then loses the marker) when the
-        # M2 occ-free core replaces the gates — the acceptance tripwire stays green either way.
-        assert gates == 0, ("M2 pending: field/patterns still carry require_occ gates")
+        assert gates == 0, "field/patterns must run occ-free (M2 landed)"
+
+    @requires_occ
+    def test_trim_grid_matches_occ_path(self, corpus):
+        pytest.importorskip("geometrykit.geometry.field")

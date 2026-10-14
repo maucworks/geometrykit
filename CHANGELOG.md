@@ -3,6 +3,17 @@
 - Name claim on PyPI + placeholder distribution. No API yet; the public
   contract is documented in README.md (roadmap) and ships with v0.1.
 
+# v0.2.0 — 2026-10-14
+
+- **M2 + M4-early (plan: OCC-exit)**: occ-free evaluation core — tensor
+  Cox–de Boor `Surface.eval`/`tangents_at`/`normal_at` (homogeneous,
+  rational-safe, correct one-sided edge derivatives) and kernel
+  `Surface.project` (multi-start Gauss–Newton). field/patterns lose their
+  `require_occ` gates (trim/crossing grids + Hankin cells run occ-free);
+  `_intersect_uv` is a pure 2D solve. OCCT-verified on the corpus (eval
+  to 1e-9, normals, projection minima) — OCCT remains oracle-only.
+  Panel acceptance tests promoted to strict pass.
+
 # v0.1.0 — 2026-10-13
 
 - First API release (feature/contract): contract v0 (canonical form,

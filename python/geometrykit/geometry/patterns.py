@@ -341,9 +341,6 @@ def hankin_cells(field: Field, faces, theta_deg: float = 60.0) -> List[List[Vec]
         Nine ``[Vec × 4]``/``[Vec × 3]`` corner lists per field quad
         (star, four corner quads, four edge triangles).
     """
-    from geometrykit.geometry.surface import occ_project_point, require_occ
-
-    require_occ()
     import math as _math
 
     theta = _math.radians(theta_deg)
@@ -351,7 +348,7 @@ def hankin_cells(field: Field, faces, theta_deg: float = 60.0) -> List[List[Vec]
     def to_domain(owner_id: int, p) -> tuple:
         if p.face == owner_id:
             return p.uv
-        _, transferred = occ_project_point(faces[owner_id], p.pos)
+        _, transferred = faces[owner_id].project(p.pos)
         return transferred
 
     out = []

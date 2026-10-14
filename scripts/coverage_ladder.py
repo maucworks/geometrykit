@@ -25,18 +25,18 @@ TOLERANCE = 0.5  # percentage points of allowed noise around a floor
 #: module-relative path → (floor %, planned-milestone note)
 FLOORS: dict[str, tuple[float, str]] = {
     "geometrykit/geometry/primitives.py": (75.0, "M2+ eval core"),
-    "geometrykit/geometry/path.py": (58.0, "M2+ divide/offset paths"),
+    "geometrykit/geometry/path.py": (59.0, "M2+ divide/offset paths"),
     "geometrykit/geometry/patterns.py": (95.0, "M2 gate removal"),
     "geometrykit/geometry/biarc.py": (84.0, "M3+ interpolation"),
     "geometrykit/geometry/frames.py": (52.0, "M6 sweep frames"),
     "geometrykit/geometry/subdivision.py": (92.0, "stable"),
     "geometrykit/geometry/curve.py": (39.0, "M3 interpolation + M4 projection"),
     "geometrykit/geometry/intersection.py": (36.0, "M5 section walk"),
-    "geometrykit/geometry/surface.py": (23.0, "M2 eval core (largest jump planned)"),
+    "geometrykit/geometry/surface.py": (26.0, "M5 tessellate + sections (tess/clip kernels)"),
     "geometrykit/geometry/spiral.py": (61.0, "M4+ projection"),
     "geometrykit/geometry/transform.py": (61.0, "M6+ loft"),
-    "geometrykit/geometry/field.py": (90.0, "M2 gate removal"),
-    "geometrykit/contract.py": (90.0, "complete"),
+    "geometrykit/geometry/field.py": (94.0, "M2 landed — gate-free baseline"),
+    "geometrykit/contract.py": (92.0, "complete"),
     "geometrykit/engine.py": (90.0, "complete"),
 }
 

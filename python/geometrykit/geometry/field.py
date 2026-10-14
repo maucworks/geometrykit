@@ -25,10 +25,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from geometrykit.geometry.primitives import Vec, _new_id
 from geometrykit.geometry.surface import (
     Surface,
-    occ_normal_at,
-    occ_project_point,
     occ_trim_loops,
-    require_occ,
 )
 
 Uv = Tuple[float, float]
@@ -213,7 +210,6 @@ def orient_division(
 
 def _sampled_loops(surf: Surface) -> List[Dict[str, list]]:
     """Trim loops as paired dense ``{"uv", "xyz"}`` polylines."""
-    require_occ()
     out = []
     for loop in occ_trim_loops(surf, samples=200):
         xyz = []
@@ -275,7 +271,7 @@ def _eval_xyz(surf: Surface, uv: Uv) -> Tuple[float, float, float]:
 
 def _project_uv(face: Surface, xyz: Tuple[float, float, float]) -> Uv:
     """Native UV of a world point via exact projection (seam transfer)."""
-    _, uv = occ_project_point(face, Vec(*xyz))
+    _, uv = face.project(Vec(*xyz))
     return uv
 
 
@@ -290,23 +286,33 @@ def _intersect_uv(seg_a: Tuple[Uv, Uv], seg_b: Tuple[Uv, Uv], guess: Uv) -> Uv:
     Returns:
         ``(u, v)`` of the intersection. Raises ``RuntimeError`` on a miss.
     """
-    require_occ()
-    from OCC.Core.GCE2d import GCE2d_MakeSegment
-    from OCC.Core.Geom2dAPI import Geom2dAPI_InterCurveCurve
-    from OCC.Core.gp import gp_Pnt2d
-
-    c_a = GCE2d_MakeSegment(gp_Pnt2d(*seg_a[0]), gp_Pnt2d(*seg_a[1])).Value()
-    c_b = GCE2d_MakeSegment(gp_Pnt2d(*seg_b[0]), gp_Pnt2d(*seg_b[1])).Value()
-    inter = Geom2dAPI_InterCurveCurve(c_a, c_b)
+    # Pure 2D segment intersection (plan M1/L0): deterministic solve,
+    # nearest hit to *guess* wins when several exist (overlapping collinear
+    # segments yield up to two endpoint hits, mirroring the OCC output).
+    (ax, ay), (bx, by) = seg_a
+    (cx, cy), (dx, dy) = seg_b
+    ex, ey = bx - ax, by - ay
+    fx, fy = dx - cx, dy - cy
+    denom = ex * fy - ey * fx
+    hits: list[Uv] = []
+    if abs(denom) > 1e-14:
+        t = ((cx - ax) * fy - (cy - ay) * fx) / denom
+        hit_s = ((cx - ax) * ey - (cy - ay) * ex) / denom
+        if -1e-9 <= t <= 1 + 1e-9 and -1e-9 <= hit_s <= 1 + 1e-9:
+            hits.append((ax + t * ex, ay + t * ey))
+    else:
+        # collinear family: overlaps produce the segment endpoints as hits
+        for pt in (seg_a[0], seg_a[1], seg_b[0], seg_b[1]):
+            if -1e-9 <= (pt[0] - ax) * ey - (pt[1] - ay) * ex <= 1e-9:
+                hits.append(pt)
+    if not hits:
+        raise RuntimeError("UV segments do not intersect")
     best: Optional[Uv] = None
     best_d = 0.0
-    for k in range(1, inter.NbPoints() + 1):
-        p = inter.Point(k)
-        d = (p.X() - guess[0]) ** 2 + (p.Y() - guess[1]) ** 2
+    for uv in hits:
+        d = (uv[0] - guess[0]) ** 2 + (uv[1] - guess[1]) ** 2
         if best is None or d < best_d:
-            best, best_d = (p.X(), p.Y()), d
-    if best is None:
-        raise RuntimeError("UV segments do not intersect")
+            best, best_d = uv, d
     return best
 
 
@@ -324,7 +330,6 @@ def trim_grid(face: Surface, spacing: float) -> Field:
     Returns:
         Field with ``(nu+1) × (nv+1)`` nodes and ``nu × nv`` cells.
     """
-    require_occ()
     edges = _classify(_sampled_loops(face))
     nu = _counts(edges["north"], spacing)
     nv = _counts(edges["west"], spacing)
@@ -369,7 +374,7 @@ def _connector_divide(face: Surface, uv_a: Uv, uv_b: Uv, n: int, samples: int = 
 def _node_at(face: Surface, uv: Uv, face_id: int) -> FieldPoint:
     """FieldPoint with exact position and normal at native ``uv``."""
     q = face.point_at(*uv)
-    return FieldPoint(pos=q, uv=uv, normal=occ_normal_at(face, *uv), face=face_id)
+    return FieldPoint(pos=q, uv=uv, normal=face.normal_at(*uv), face=face_id)
 
 
 def crossing_grid(
@@ -395,7 +400,6 @@ def crossing_grid(
     Returns:
         Field with one shared lattice row per seam.
     """
-    require_occ()
     if not faces:
         raise ValueError("crossing_grid needs at least one face")
     seals = {a: b for a, b in shared}
