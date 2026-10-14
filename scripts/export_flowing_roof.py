@@ -28,7 +28,13 @@ sys.modules["flowing_roof"] = fr
 _spec.loader.exec_module(fr)
 
 from geometrykit.export import write_step_geometry  # noqa: E402
+from geometrykit.geometry.primitives import Vec  # noqa: E402
 from geometrykit.runtimes._npu import patch_g1, patch_np  # noqa: E402
+
+# Tangency strength: how stiffly the patches leave their edges, as a multiple
+# of the support ribbons' own slope (1.0 = the ribbon's rate, None = the
+# solver's minimum-norm leftover, which is softer). Dial this and re-run.
+TANGENCY = 1.0
 
 # the mixed-height network: the real non-planar G1 stress case
 PARAMS = {
@@ -50,22 +56,30 @@ EDGES = (
 )
 
 
-def spine_field(edge, spine, support, oriented, params_u, params_v):
-    """The constraint normal of *edge*, read on *support*'s spine.
+def spine_field(edge, spine, support, oriented, params_u, params_v, towards):
+    """The constraint field of *edge*, read on *support*'s spine.
 
-    The spine is located on the support by projection (see
-    ``patch_g1.normal_field_from_support``), so it does not matter whether the
-    ribbon is one-sided or symmetric, nor how either is parameterised.
+    The spine is located on the support by projection, so it does not matter
+    whether the ribbon is one-sided or symmetric, nor how either is
+    parameterised. The spec carries the support and its spine as well, which
+    is what a tangency strength is scaled against.
     """
     patch_params = params_u if edge in ("south", "north") else params_v
     curve_params = patch_np.edge_curve_params(oriented, edge, patch_params)
-    on_spine = patch_g1.normal_field_from_support(support, spine)
+    spec = patch_g1.support_constraint(support, spine, towards=towards)
 
-    def at(t):
-        k = min(range(len(curve_params)), key=lambda m: abs(curve_params[m] - t))
-        return on_spine(curve_params[k])
+    def _map(field):
+        def at(t):
+            return field(min(curve_params, key=lambda c: abs(c - t)))
 
-    return at
+        return at
+
+    return {
+        "normal": _map(spec["normal"]),
+        "slope": _map(spec["slope"]),
+        "support": support,
+        "spine": spine,
+    }
 
 
 def edge_residual(surface, edge, params, field) -> float:
@@ -104,20 +118,38 @@ def main() -> None:
         spines = [getattr(g, n) for n in spine_names]
         supports = [g.ribbons[n] for n in support_names]
         params_u, params_v, oriented = patch_np.coons_parametrization(spines, nu=16, nv=16)
+        towards = Vec(
+            sum(c.point_at(0.5).x for c in spines) / 4,
+            sum(c.point_at(0.5).y for c in spines) / 4,
+            sum(c.point_at(0.5).z for c in spines) / 4,
+        )
         fields = {
-            edge: spine_field(edge, spine, support, oriented, params_u, params_v)
+            edge: spine_field(edge, spine, support, oriented, params_u, params_v, towards)
             for edge, spine, support in zip(patch_g1.EDGE_NAMES, spines, supports)
         }
         surface, _corners, stations = patch_g1.constrained_coons_patch(
-            spines, fields, nu=16, nv=16
+            spines, fields, nu=16, nv=16, tangency=TANGENCY
         )
         patches.append((name, surface))
-        print(f"{name} patch built from the kernel")
+        label = "solver default" if TANGENCY is None else f"tangency {TANGENCY}"
+        print(f"{name} patch built from the kernel ({label})")
         for edge in patch_g1.EDGE_NAMES:
             params = stations[0] if edge in ("south", "north") else stations[1]
+            worst = edge_residual(surface, edge, params, fields[edge]["normal"])
+            slopes = []
+            for t in params[2:-2]:
+                if edge in ("south", "north"):
+                    cross = surface.tangents_at(t, 0.0)[1] if edge == "south" else (
+                        surface.tangents_at(t, 1.0)[1]
+                    )
+                else:
+                    cross = surface.tangents_at(0.0, t)[0] if edge == "west" else (
+                        surface.tangents_at(1.0, t)[0]
+                    )
+                slopes.append(abs(cross) / max(patch_g1._cross_extent(surface, edge, t), 1e-9))
             print(
-                f"  G1 residual {edge:>5}: "
-                f"{edge_residual(surface, edge, params, fields[edge]):.3e}"
+                f"  {edge:>5}: G1 {worst:.3e}   boundary slope "
+                f"{sum(slopes) / len(slopes):.3f} per unit distance"
             )
 
     # One file, three named groups, no OCCT twin: the kernel patch, the four
