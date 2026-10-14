@@ -55,11 +55,16 @@ def averaged_inner_knots(
 ) -> list:
     """Averaged inner knots.
 
-    Window ``j`` (1-based): mean of ``params[j − 1 + window_offset ..
-    j + q − 2 + window_offset]`` — A9.1 uses ``window_offset = 0``
-    (window starts at the j-th param); the A9.2 tangent-case layout uses
-    ``window_offset = −1`` (control count enlarged by two). Windows that
-    run past the data clamp to the last parameter (A9.1 tail behaviour).
+    Window ``j`` (1-based): mean of ``params[j + window_offset ..
+    j + q − 1 + window_offset]`` (0-based parameters). Note the window starts
+    at ``params[j + window_offset]``, not at ``params[j − 1 + window_offset]``:
+    with ``window_offset = 0`` it therefore covers the *last* data parameters
+    (Piegl's eq. 9.8 window shifted one step forward). That placement is what
+    the standalone curve interpolation matches OCCT with, and what the patch
+    grid stays solvable with; ``window_offset = −1`` is Piegl's literal rule
+    and leaves the final span wide. The A9.2 tangent-case layout uses
+    ``window_offset = −1`` on a data list enlarged by two. Windows that run
+    past the data clamp to the last parameter (A9.1 tail behaviour).
     """
     out = []
     for j in range(1, count + 1):

@@ -219,6 +219,14 @@ def _interp_1d_vec(values: list, params: list, q: int):
     inner = unknowns - q - 1
     flat: list = [0.0] * (q + 1)
     if inner > 0:
+        # window_offset=0 is the placement this interpolation is solvable
+        # with: it keeps the last data parameters covered by the averaging
+        # windows. Piegl's A9.1 rule (window_offset=-1) leaves the last span
+        # wide and the system ill-conditioned for chord parameters -- the
+        # solved poles then blow up. The consequence of offset=0 is a first
+        # span about twice the first station gap, which is what crowds the
+        # control net away from the boundary (see the parameterisation note in
+        # the module docstring).
         flat += averaged_inner_knots(params[: inner + q], q, inner, window_offset=0)
     flat += [1.0] * (q + 1)
 
