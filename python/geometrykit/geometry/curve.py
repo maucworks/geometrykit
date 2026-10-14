@@ -878,6 +878,7 @@ class Curve:
 
         return result
 
+    @classmethod
     def from_occ_edge(cls, edge) -> "Curve":
         """Create a Curve from an OCC ``TopoDS_Edge``.
 

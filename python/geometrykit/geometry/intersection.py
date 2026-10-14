@@ -264,7 +264,7 @@ class Intersection:
             if adaptor.GetType() == GeomAbs_BSplineCurve:
                 from geometrykit.geometry.curve import Curve as _Crv
 
-                curves.append(_Crv.from_occ_edge(edge))
+                curves.append(_Crv.from_occ_edge(edge))  # instance call
             exp.Next()
 
         return cls(curves=curves)
