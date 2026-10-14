@@ -48,6 +48,16 @@ G2 = True
 # network (ratio 1.36 vs 1.75), with cross-curvature 2x lower.
 PARAMETRIZATION = "arclength"
 
+# Loose fill: stations of enlargement per side (0 = the classical fill). With
+# loose > 0 the plate is solved over a grid enlarged by that many stations on
+# every side -- the through-the-edge construction OCCT's plate uses -- and the
+# window returns: the original edges stay exact interior lines, the plate gets
+# a margin to spend bending on, and the belt is trimmed away. Measured on this
+# network at tangency 0.75 (probe density): cross-curvature band/core 3.44x
+# against 2.35x tight, dev from twin 0.038 vs 0.029 -- the metric says the eye
+# should judge this one, as it did for the tangency sweep.
+LOOSE = 0
+
 # Solve the interior as an energy-minimising fill instead of taking the Coons
 # blend: the boundary ring still interpolates the boundary curves exactly, and
 # the interior is the thin-plate solution through it (simply supported). That
@@ -186,7 +196,7 @@ def main() -> None:
         }
         surface, _corners, stations = patch_g1.constrained_coons_patch(
             spines, fields, nu=16, nv=16, tangency=TANGENCY, g2=G2, fill=FILL,
-            parametrization=PARAMETRIZATION
+            loose=LOOSE, parametrization=PARAMETRIZATION
         )
         patches.append((name, surface))
         label = "solver default" if TANGENCY is None else f"tangency {TANGENCY}"
@@ -243,7 +253,8 @@ def main() -> None:
         ("Edge_top_back_eave", g.top2),
         ("Edge_left_back", g.left2),
     ]
-    step_path = out_dir / "flowing-roof.step"
+    suffix = "" if LOOSE <= 0 else f"-loose{LOOSE}"
+    step_path = out_dir / f"flowing-roof{suffix}.step"
     write_step_geometry(
         str(step_path),
         surfaces=surfaces,
