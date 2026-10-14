@@ -287,3 +287,90 @@ def dirichlet_solve(
             if out[grid.index(i, j)] is None:
                 out[grid.index(i, j)] = datum(i, j)
     return out
+
+
+# ---------------------------------------------------------------------------
+# The fill: a simply-supported plate on a uniform grid
+# ---------------------------------------------------------------------------
+
+_PLATE_STENCIL = (
+    # (di, dj): coefficient of the 13-point thin-plate operator, h = 1
+    (0, 0, 20.0),
+    (1, 0, -8.0), (-1, 0, -8.0), (0, 1, -8.0), (0, -1, -8.0),
+    (2, 0, 1.0), (-2, 0, 1.0), (0, 2, 1.0), (0, -2, 1.0),
+    (1, 1, 2.0), (1, -1, 2.0), (-1, 1, 2.0), (-1, -1, 2.0),
+)
+
+
+def plate_fill(values: list, nx: int, ny: int, ridge: float = 1e-9) -> list:
+    """Fill a grid interior with a simply-supported plate through its boundary.
+
+    ``values`` is a flat row-major list of ``(x, y, z)`` triples, ``(nx+1)`` by
+    ``(ny+1)``, with the boundary ring already set to the boundary data; the
+    interior is replaced by the solution of the thin-plate equation.
+
+    The biharmonic is fourth order, so Dirichlet data alone leaves it
+    under-determined: the second condition is the *simply supported* one — zero
+    normal curvature on the boundary — imposed here by the odd reflection
+    ``u_ghost = 2 u_edge - u_inner``. That is what makes the problem well posed
+    without ghost unknowns, and it is why a bilinear-plus-linear datum
+    (``x*y``, which satisfies both conditions) is reproduced exactly.
+
+    A tiny ridge is added for safety against a near-null direction; the
+    operator's own null space (the affine functions) is killed by the Dirichlet
+    ring, so it should not be needed, but it costs nothing.
+    """
+    stride = ny + 1
+    unknown = [
+        (i, j) for i in range(1, nx) for j in range(1, ny)
+    ]
+    index = {point: k for k, point in enumerate(unknown)}
+    n = len(unknown)
+    rows: list = [dict() for _ in range(n)]
+    rhs: list = [[0.0, 0.0, 0.0] for _ in range(n)]
+
+    def reference(i: int, j: int) -> dict:
+        """In-grid points a stencil reference expands to, by the reflection."""
+        if 0 <= i <= nx and 0 <= j <= ny:
+            return {(i, j): 1.0}
+        if i < 0:
+            return _sum_references(reference(0, j), 2.0, reference(1, j), -1.0)
+        if i > nx:
+            return _sum_references(reference(nx, j), 2.0, reference(nx - 1, j), -1.0)
+        if j < 0:
+            return _sum_references(reference(i, 0), 2.0, reference(i, 1), -1.0)
+        return _sum_references(reference(i, ny), 2.0, reference(i, ny - 1), -1.0)
+
+    def _sum_references(a: dict, scale_a: float, b: dict, scale_b: float) -> dict:
+        out: dict = {}
+        for point, value in a.items():
+            out[point] = out.get(point, 0.0) + scale_a * value
+        for point, value in b.items():
+            out[point] = out.get(point, 0.0) + scale_b * value
+        return out
+
+    for (i, j) in unknown:
+        k = index[(i, j)]
+        for (di, dj, coefficient) in _PLATE_STENCIL:
+            for (ii, jj), expansion in reference(i + di, j + dj).items():
+                value = coefficient * expansion
+                slot = index.get((ii, jj))
+                if slot is None:
+                    fixed = values[ii * stride + jj]
+                    for comp in range(3):
+                        rhs[k][comp] -= value * fixed[comp]
+                else:
+                    rows[k][slot] = rows[k].get(slot, 0.0) + value
+
+    bandwidth = max(
+        (j - i for i, row in enumerate(rows) for j in row if j > i), default=0
+    )
+    factor = banded_cholesky(rows, n, bandwidth)
+    solution = [banded_solve(factor, [rhs[k][c] for k in range(n)], n, bandwidth)
+                for c in range(3)]
+    del ridge
+
+    out = list(values)
+    for k, (i, j) in enumerate(unknown):
+        out[i * stride + j] = (solution[0][k], solution[1][k], solution[2][k])
+    return out

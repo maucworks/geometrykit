@@ -71,6 +71,7 @@ from geometrykit.runtimes._npu.curve_np import _nonzero_basis
 from geometrykit.runtimes._npu.patch_np import (
     coons_parametrization,
     discrete_coons_patch,
+    discrete_plate_fill,
 )
 
 EDGE_NAMES = ("south", "east", "north", "west")
@@ -212,6 +213,42 @@ def _ridge_solve(rows: list, unknowns: int, ridge: float) -> list:
         correction = _solve_dense(ata2, atb2)
         solution = [solution[i] + correction[i] for i in range(unknowns)]
     return solution
+
+
+def _second_deriv_weights(flat: list, degree: int) -> tuple:
+    """Weights giving ``S''`` at the two clamped ends from the poles.
+
+    Returns ``(low, high)``: ``{pole_index: weight}`` for ``S''(0)`` and
+    ``S''(1)``. Only three poles contribute at each end.
+    """
+    if degree < 2:
+        return {}, {}
+    n = len(flat) - degree - 1  # number of poles
+    span_lo = flat[degree + 1] - flat[degree]
+    if span_lo <= 0.0:
+        raise G1Error("degenerate knot span at the start of the net")
+    # low end: poles 0, 1, 2
+    first = flat[degree + 1]
+    second = flat[degree + 2]
+    low = {
+        0: 6.0 / (span_lo * span_lo),
+        1: -6.0 * (1.0 / (span_lo * second) + 1.0 / (span_lo * span_lo)),
+        2: 6.0 / (span_lo * second),
+    }
+    del first
+    # high end: the mirror, poles n-1, n-2, n-3
+    span_hi = flat[-degree - 1] - flat[-degree - 2]
+    if span_hi <= 0.0:
+        raise G1Error("degenerate knot span at the end of the net")
+    back_first = 1.0 - flat[-degree - 2]
+    back_second = 1.0 - flat[-degree - 3]
+    high = {
+        n - 1: 6.0 / (span_hi * span_hi),
+        n - 2: -6.0 * (1.0 / (span_hi * back_second) + 1.0 / (span_hi * span_hi)),
+        n - 3: 6.0 / (span_hi * back_second),
+    }
+    del back_first
+    return low, high
 
 
 def _second_deriv_weights(flat: list, degree: int) -> tuple:
@@ -410,9 +447,6 @@ def solve_g1_constraints(
     corner_stations: int = 1,
     tangency: float | None = None,
     g2_edges: "Sequence[str] | None" = None,
-    band: "Sequence[tuple] | None" = None,
-    energy_weight: float | None = None,
-    constraint_weight: float = 1.0,
 ):
     """P-1: enforce the G1 tangent-plane rows on a P-0 Coons patch.
 
@@ -458,17 +492,13 @@ def solve_g1_constraints(
     # the unknown band: interior control points that carry a boundary cross
     # derivative (the boundary rows/columns are pinned by the interpolated
     # boundary curves, so corner-adjacent points on them stay put)
-    band_arg = band  # what the caller asked for, forwarded to the G2 pass
-    if band is None:
-        movable = set()
-        for i in range(1, n_u - 1):
-            movable.add((i, 1))
-            movable.add((i, n_v - 2))
-        for j in range(1, n_v - 1):
-            movable.add((1, j))
-            movable.add((n_u - 2, j))
-    else:
-        movable = set(band)
+    movable = set()
+    for i in range(1, n_u - 1):
+        movable.add((i, 1))
+        movable.add((i, n_v - 2))
+    for j in range(1, n_v - 1):
+        movable.add((1, j))
+        movable.add((n_u - 2, j))
     band = sorted(movable)
     index = {point: 3 * k for k, point in enumerate(band)}
     if not band:
@@ -585,11 +615,8 @@ def solve_g1_constraints(
                 field,
             )
 
-    if not rows and energy_weight is None:
+    if not rows:
         return surface
-
-    if energy_weight is not None:
-        rows.extend(_energy_rows(net, index, n_u, n_v, energy_weight))
 
     unknowns = 3 * len(band)
     solution = _ridge_solve(rows, unknowns, ridge)
@@ -621,9 +648,6 @@ def solve_g1_constraints(
         ridge=ridge,
         corner_stations=corner_stations,
         tangency=tangency,
-        band=band_arg,
-        energy_weight=energy_weight,
-        constraint_weight=constraint_weight,
     )
 
 
@@ -708,9 +732,6 @@ def _refine_g2(
     ridge: float = 1e-10,
     corner_stations: int = 1,
     tangency: float | None = None,
-    band: "Sequence[tuple] | None" = None,
-    energy_weight: float | None = None,
-    constraint_weight: float = 1.0,
 ):
     """Second pass: match the support's cross-curvature on *g2_edges*.
 
@@ -739,16 +760,13 @@ def _refine_g2(
     n_u = len(net)
     n_v = len(net[0])
 
-    if band is None:
-        movable = set()
-        for i in range(1, n_u - 1):
-            for j in (1, 2, n_v - 3, n_v - 2):
-                movable.add((i, j))
-        for j in range(1, n_v - 1):
-            for i in (1, 2, n_u - 3, n_u - 2):
-                movable.add((i, j))
-    else:
-        movable = set(band)
+    movable = set()
+    for i in range(1, n_u - 1):
+        for j in (1, 2, n_v - 3, n_v - 2):
+            movable.add((i, j))
+    for j in range(1, n_v - 1):
+        for i in (1, 2, n_u - 3, n_u - 2):
+            movable.add((i, j))
     band = sorted(movable)
     index = {point: 3 * k for k, point in enumerate(band)}
     if not band:
@@ -790,7 +808,7 @@ def _refine_g2(
                         continue
                     for comp in range(3):
                         coefs[base_index + comp] = coefficient * normal[comp]
-                rows.append((coefs, -residual, constraint_weight))
+                rows.append((coefs, -residual))
         else:
             samples = _field_samples(field, params_v, corner_stations)
             low = edge == "west"
@@ -817,7 +835,7 @@ def _refine_g2(
                         continue
                     for comp in range(3):
                         coefs[base_index + comp] = coefficient * normal[comp]
-                rows.append((coefs, -residual, constraint_weight))
+                rows.append((coefs, -residual))
 
     # ── the curvature rows
     for edge in EDGE_NAMES:
@@ -889,10 +907,7 @@ def _refine_g2(
                         continue
                     for comp in range(3):
                         coefs[base_index + comp] = coefficient * normal[comp]
-            rows.append((coefs, target - residual, constraint_weight))
-
-    if energy_weight is not None:
-        rows.extend(_energy_rows(net, index, n_u, n_v, energy_weight))
+            rows.append((coefs, target - residual))
 
     unknowns = 3 * len(band)
     solution = _ridge_solve(rows, unknowns, ridge)
@@ -927,7 +942,6 @@ def constrained_coons_patch(
     tangency: float | None = None,
     g2: bool = False,
     fill: bool = False,
-    constraint_weight: float = 1e4,
     parametrization: str = "chord",
 ):
     """P-1 entry point: G1-constrained discrete Coons patch.
@@ -948,13 +962,11 @@ def constrained_coons_patch(
                             support's own slope (``1.0`` matches it, higher is
                             stiffer). ``None`` leaves it to the minimum-norm
                             solve.
-        fill:               solve the interior as an energy-minimising fill
-                            instead of taking the Coons blend: the boundary
-                            rows still interpolate the boundary curves
-                            exactly, the interior minimises the discrete plate
-                            energy under the continuity constraints.
-        constraint_weight:  how hard the continuity constraints press against
-                            that energy (default 1e4).
+        fill:               base the patch on the energy-minimising plate
+                            fill instead of the Coons blend. The boundary rows
+                            are identical; the interior is the thin-plate
+                            solution through that boundary, so the continuity
+                            solve starts from a smooth surface.
         parametrization:    how the patch stations are spread -- ``"chord"``
                             (the curve's own parameterisation) or
                             ``"arclength"`` (even in space, uniform knots).
@@ -979,24 +991,18 @@ def constrained_coons_patch(
         curves, nu=nu, nv=nv, tol=tol, parametrization=parametrization
     )
     if fill:
-        # Two stages, deliberately: first the plate problem on its own --
-        # boundary rows fixed (they interpolate the boundary curves exactly),
-        # interior minimising the discrete plate energy, no continuity rows --
-        # which is a well-conditioned banded system and gives the even,
-        # bulging shape a minimising fill has. Then the continuity solve on
-        # top, which is the same machinery as before. Coupling both at once
-        # (one stiff system, constraints weighted against the energy) loses
-        # precision in the normal equations and produces spikes.
-        n_u = len(surface.control_points)
-        n_v = len(surface.control_points[0])
-        surface = solve_g1_constraints(
-            surface,
-            params_u,
-            params_v,
-            {},
-            ridge=ridge,
-            band=[(i, j) for i in range(1, n_u - 1) for j in range(1, n_v - 1)],
-            energy_weight=1.0,
+        # The base is the energy-minimising plate fill, not the Coons blend:
+        # the boundary rows are identical (same stations, same boundary curves)
+        # but the interior is the thin-plate solution, so the continuity solve
+        # below starts from a surface that already wants to be smooth instead
+        # of from a flat blend with the bending at the edges.
+        surface, corners = discrete_plate_fill(
+            curves,
+            nu=nu,
+            nv=nv,
+            tol=tol,
+            degree=degree,
+            parametrization=parametrization,
         )
 
     fixed = solve_g1_constraints(

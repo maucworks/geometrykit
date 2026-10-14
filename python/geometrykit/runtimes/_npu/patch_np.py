@@ -331,6 +331,52 @@ def _interp_1d_vec(values: list, params: list, q: int, uniform_knots: bool = Fal
     return cps, knots, mults
 
 
+def _tensor_interpolate(
+    grid: list,
+    params_u: list,
+    params_v: list,
+    degree: int,
+    uniform_knots: bool,
+):
+    """Interpolate a station grid into a tensor-product NURBS `Surface`."""
+    from geometrykit.geometry.surface import Surface
+
+    n_u = len(params_u)
+    n_v = len(params_v)
+    qu = max(1, min(degree, n_u - 1))
+    qv = max(1, min(degree, n_v - 1))
+
+    per_col = []
+    for j in range(n_v):
+        vals = [tuple(grid[i][j]) for i in range(n_u)]
+        cps, knots_u, mults_u = _interp_1d_vec(
+            vals, params_u[:n_u], qu, uniform_knots=uniform_knots
+        )
+        per_col.append((cps, knots_u, mults_u))
+    knots_u, mults_u = per_col[0][1], per_col[0][2]
+    n_u_slots = len(per_col[0][0])
+
+    net_rows: list = []
+    knots_v = mults_v = None
+    for i in range(n_u_slots):
+        col = [per_col[j][0][i] for j in range(n_v)]
+        cps_i, kv, mv = _interp_1d_vec(
+            col, params_v[:n_v], qv, uniform_knots=uniform_knots
+        )
+        net_rows.append([Vec(*p) for p in cps_i])
+        knots_v, mults_v = kv, mv
+
+    return Surface(
+        control_points=net_rows,
+        uknots=knots_u,
+        vknots=knots_v,
+        umults=mults_u,
+        vmults=mults_v,
+        udegree=qu,
+        vdegree=qv,
+    )
+
+
 def discrete_coons_patch(
     curves: Sequence,
     nu: int = 8,
@@ -350,48 +396,58 @@ def discrete_coons_patch(
     Returns:
         ``(surface, corners)`` — the constructed Surface + the corner sheet.
     """
-    from geometrykit.geometry.surface import Surface
+
+    grid, params_u, params_v, corners = discrete_coons_grid(
+        curves, nu=nu, nv=nv, tol=tol, parametrization=parametrization
+    )
+    surface = _tensor_interpolate(
+        grid,
+        params_u,
+        params_v,
+        degree,
+        uniform_knots=parametrization == "arclength",
+    )
+    return surface, {k: Vec(*v) for k, v in corners.items()}
+
+
+def discrete_plate_fill(
+    curves: Sequence,
+    nu: int = 8,
+    nv: int = 8,
+    tol: float = 1e-6,
+    degree: int = 3,
+    parametrization: str = "arclength",
+):
+    """A four-boundary patch whose interior is a minimising plate fill.
+
+    The boundary is the same station grid the Coons patch uses (so the boundary
+    curves are interpolated exactly and the station map is unchanged); the
+    interior is *not* the bilinear blend but the solution of the thin-plate
+    equation through that boundary, which is what gives an energy-minimising
+    fill its even curvature instead of a flat middle with bent edges.
+
+    The plate is simply supported (see `linalg_np.plate_fill`), which is what
+    makes the fourth-order problem well posed from boundary values alone.
+
+    Returns ``(surface, corners)`` like `discrete_coons_patch`.
+    """
+    from geometrykit.runtimes._npu import linalg_np
 
     grid, params_u, params_v, corners = discrete_coons_grid(
         curves, nu=nu, nv=nv, tol=tol, parametrization=parametrization
     )
     n_u = len(params_u)
     n_v = len(params_v)
-    qu = max(1, min(degree, nu))
-    qv = max(1, min(degree, nv))
-    # uniform parameters pair with uniform knots; chord parameters need the
-    # averaged knots (the interpolation is only solvable with those there)
-    uniform_knots = parametrization == "arclength"
-
-    # step 1: interpolate each grid COLUMN j along u — intermediate columns
-    per_col = []
-    for j in range(n_v):
-        vals = [tuple(grid[i][j]) for i in range(n_u)]
-        cps, knots_u, mults_u = _interp_1d_vec(
-            vals, params_u[: n_u], qu, uniform_knots=uniform_knots
-        )
-        per_col.append((cps, knots_u, mults_u))
-    knots_u, mults_u = per_col[0][1], per_col[0][2]
-    n_u_slots = len(per_col[0][0])
-
-    # step 2: interpolate each u-slot's column along v — the final net rows
-    net_rows: list = []
-    knots_v = mults_v = None
-    for i in range(n_u_slots):
-        col = [per_col[j][0][i] for j in range(n_v)]
-        cps_i, kv, mv = _interp_1d_vec(
-            col, params_v[: n_v], qv, uniform_knots=uniform_knots
-        )
-        net_rows.append([Vec(*p) for p in cps_i])
-        knots_v, mults_v = kv, mv
-
-    surface = Surface(
-        control_points=net_rows,
-        uknots=knots_u,
-        vknots=knots_v,
-        umults=mults_u,
-        vmults=mults_v,
-        udegree=qu,
-        vdegree=qv,
+    flat = [(point[0], point[1], point[2]) for row in grid for point in row]
+    filled = linalg_np.plate_fill(flat, n_u - 1, n_v - 1)
+    solved = [
+        [filled[i * n_v + j] for j in range(n_v)] for i in range(n_u)
+    ]
+    surface = _tensor_interpolate(
+        solved,
+        params_u,
+        params_v,
+        degree,
+        uniform_knots=parametrization == "arclength",
     )
     return surface, {k: Vec(*v) for k, v in corners.items()}
