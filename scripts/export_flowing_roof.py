@@ -6,6 +6,9 @@ Run in an env with pythonocc (the ribbon normals and the twin):
     /opt/miniconda3/envs/a320-ifc-configurator/bin/python \
         scripts/export_flowing_roof.py
 
+Output goes to ``wip/flowing-roof-eval/`` (gitignored scratch: generated
+results are inspected, not committed).
+
 All three writers are occ-free; only the constraint normals (OCCT ribbon
 surfaces) and the twin comparison need pythonocc.
 """
@@ -101,7 +104,7 @@ def main() -> None:
     fr.build_ribbons(g, twist=PARAMS["twist"])
     fr.build_patches(g)
 
-    out_dir = ROOT / "storage" / "flowing-roof-eval"
+    out_dir = ROOT / "wip" / "flowing-roof-eval"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     curves = [g.bottom, g.right, g.top, g.left]

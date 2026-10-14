@@ -56,6 +56,10 @@ is in **English**.
 ## Testing
 
 - `python3 -m venv .venv && pip install -e ".[dev]"; pytest tests/ -q`
+- **Generated results and scratch work go in the gitignored `wip/`
+  directory** -- exported STEP/OBJ/STL, viewer pages, sample outputs, anything
+  meant to be looked at rather than committed. Library tests stay in
+  `tests/`; a script may write to `wip/`, never to a tracked path.
 - Oracle-inclusive coverage run + the staged coverage ladder
   (`scripts/coverage_ladder.py`) documented in README § Development.
 - Fixtures: the A320 demo corpus is committed under `tests/fixtures/`;
