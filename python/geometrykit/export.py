@@ -35,8 +35,8 @@ def surface_to_obj(
     faces = []
     for i in range(nu):
         for j in range(nv):
-            idx = lambda di, dj: i * (nv + 1) + (j + dj)
-            faces.append((idx(0, 0), idx(1, 0), idx(1, 1), idx(0, 1)))
+            base = i * (nv + 1) + j
+            faces.append((base, base + nv + 1, base + nv + 2, base + 1))
     return verts, faces
 
 
@@ -123,7 +123,7 @@ def surfaces_to_ifc_step(surfaces: list, path: str, labels: list | None = None) 
                 cp = f.create_entity("IfcCartesianPoint", Coordinates=(p.x, p.y, p.z))
                 row_pts.append(cp)
             cps.append(row_pts)
-        bspline = f.create_entity(
+        f.create_entity(
             "IfcBSplineSurfaceWithKnots",
             UDegree=surf.udegree,
             VDegree=surf.vdegree,

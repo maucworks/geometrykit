@@ -137,28 +137,56 @@ def _comp_corn(c00, c10, c01, c11, a: float, b: float) -> tuple:
     ]
 
 
+def coons_parametrization(curves: Sequence, nu: int = 8, nv: int = 8, tol: float = 1e-6):
+    """The station parameters the Coons patch is built on.
+
+    Returns ``(params_u, params_v, oriented)`` -- the chord parameters on
+    the oriented south (u) and east (v) boundaries, plus the orientation
+    sheet from `orient_cycle`. The u/v stations double as the sampling
+    stations of the north/west boundaries, so a caller holding a field in
+    *curve* parameter space maps it into patch space with
+    `edge_curve_params`.
+    """
+    oriented = orient_cycle(curves, tol=tol)
+    south_curve, south_rev = oriented["south"]
+    east_curve, east_rev = oriented["east"]
+    south_fwd = _sample(south_curve, [i / nu for i in range(nu + 1)], south_rev)
+    params_u = chord_params(south_fwd)
+    east_fwd = _sample(east_curve, [j / nv for j in range(nv + 1)], east_rev)
+    params_v = chord_params(east_fwd)
+    return params_u, params_v, oriented
+
+
+def edge_curve_params(oriented: dict, edge: str, patch_params: Sequence[float]) -> list:
+    """Map patch-space station params onto one edge's own curve parameter.
+
+    Returns the parameter on the edge curve at which each patch-space
+    station sits -- accounting for a drawn direction that runs opposite
+    to the patch's sampled direction.
+    """
+    _curve, rev = oriented[edge]
+    if rev:
+        return [1.0 - p for p in patch_params]
+    return list(patch_params)
+
+
 def discrete_coons_grid(curves: Sequence, nu: int = 8, nv: int = 8, tol: float = 1e-6):
     """Sample the four boundaries onto the discrete Coons grid.
 
     Returns ``(grid, params_u, params_v, corners)`` — grid[i][j] = (x, y, z).
     """
-    Orient = orient_cycle(curves, tol=tol)
-    south_curve, south_rev = Orient["south"]
-    east_curve, east_rev = Orient["east"]
-    north_curve, north_rev = Orient["north"]
-    west_curve, west_rev = Orient["west"]
-
-    south_fwd = _sample(south_curve, [i / nu for i in range(nu + 1)], south_rev)
-    params_u = chord_params(south_fwd)
-    east_fwd = _sample(east_curve, [j / nv for j in range(nv + 1)], east_rev)
-    params_v = chord_params(east_fwd)
+    params_u, params_v, orient = coons_parametrization(curves, nu=nu, nv=nv, tol=tol)
+    south_curve, south_rev = orient["south"]
+    east_curve, east_rev = orient["east"]
+    north_curve, north_rev = orient["north"]
+    west_curve, west_rev = orient["west"]
 
     Su = _sample(south_curve, params_u, south_rev)
     Sn = _sample(north_curve, params_u, north_rev)
     Se = _sample(east_curve, params_v, east_rev)
     Sw = _sample(west_curve, params_v, west_rev)
 
-    corners = Orient["corners"]
+    corners = orient["corners"]
 
     grid = []
     for i in range(nu + 1):
