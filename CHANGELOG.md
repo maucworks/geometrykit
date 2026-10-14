@@ -5,6 +5,12 @@
 
 # v0.2.0 — 2026-10-14
 
+- Spline-cage data model (contract v0.1): `CoordinateSystem` (placed
+  Cartesian frame: position + Hamilton quaternion, canonical sign `qw ≥ 0`,
+  XY plane = planarity plane for cage tangents) and `Corner` (associates a
+  frame with curve terminals by angle records; `tangent_for` returns the
+  3D world-space tangent; terminal-spacing degeneracy raises).
+  `geometrykit.cage` module; serialization via the contract (hex floats).
 - **M2 + M4-early (plan: OCC-exit)**: occ-free evaluation core — tensor
   Cox–de Boor `Surface.eval`/`tangents_at`/`normal_at` (homogeneous,
   rational-safe, correct one-sided edge derivatives) and kernel
