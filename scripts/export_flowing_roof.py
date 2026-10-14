@@ -41,6 +41,13 @@ TANGENCY = 1.0
 # flat strips, so this drives their cross-curvature to zero.
 G2 = True
 
+# Solve the interior as an energy-minimising fill instead of taking the Coons
+# blend: the boundary rows still interpolate the boundary curves exactly, the
+# interior minimises a discrete plate energy. That is where an energy-minimising
+# CAD fill gets its even curvature, and it is what makes the surface read like
+# the OCCT twin rather than like a flat blend with bent edges.
+FILL = True
+
 # the mixed-height network: the real non-planar G1 stress case
 PARAMS = {
     "height_sw": 2.4,
@@ -166,11 +173,12 @@ def main() -> None:
             for edge, spine, support in zip(patch_g1.EDGE_NAMES, spines, supports)
         }
         surface, _corners, stations = patch_g1.constrained_coons_patch(
-            spines, fields, nu=16, nv=16, tangency=TANGENCY, g2=G2
+            spines, fields, nu=16, nv=16, tangency=TANGENCY, g2=G2, fill=FILL
         )
         patches.append((name, surface))
         label = "solver default" if TANGENCY is None else f"tangency {TANGENCY}"
         label += ", G2" if G2 else ", G1 only"
+        label += ", energy fill" if FILL else ", Coons blend"
         print(f"{name} patch built from the kernel ({label})")
         for edge in patch_g1.EDGE_NAMES:
             params = stations[0] if edge in ("south", "north") else stations[1]
