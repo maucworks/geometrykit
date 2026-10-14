@@ -127,8 +127,13 @@ def main() -> None:
         params = stations[0] if edge in ("south", "north") else stations[1]
         print(f"  G1 residual {edge:>5}: {edge_residual(p1_surf, edge, params, fields[edge]):.3e}")
 
-    surfaces = [p1_surf, g.surf]
-    labels = ["PatchKernelG1", "PatchOccTwin"]
+    # the constraint ribbons travel with the patches: a zebra or
+    # curvature analysis across the shared seams is the visual G1 check
+    ribbon_order = [name for _edge, name in EDGES]
+    surfaces = [p1_surf, g.surf] + [g.ribbons[name] for name in ribbon_order]
+    labels = ["PatchKernelG1", "PatchOccTwin"] + [
+        f"Ribbon_{edge}" for edge, _name in EDGES
+    ]
     obj_path = out_dir / "flowing-roof-patches.obj"
     write_obj(surfaces, str(obj_path), labels=labels)
     print(f"OBJ  -> {obj_path}")
