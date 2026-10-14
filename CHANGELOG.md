@@ -45,6 +45,21 @@
   reproduces the support's own rate of departure, higher is stiffer, `None`
   (default) keeps the previous minimum-norm behaviour. Linear in the factor
   and G1-exact at every value (measured worst |d . N| 3.4e-08).
+- **G2 (curvature) continuity** (`patch_g1`, `g2=True` on
+  `constrained_coons_patch`): G1 matches the tangent plane and leaves the
+  surface free to bend away from it immediately, which is visible as a crease
+  against a flat support. G2 additionally matches the normal-section curvature
+  across the boundary -- `(S_vv . N) = kappa_support * |S_v|^2`, linear in the
+  poles once `|S_v|` and the support's curvature are taken from the G1 result,
+  so it runs as a second pass over a wider control band with the G1 rows
+  rebuilt alongside. Measured on the flowing roof against flat ribbons
+  (support curvature exactly zero): the ridge's cross-curvature gap falls from
+  0.184 to 1e-5, the other edges from ~0.02 to 1e-5, and G1 tightens from
+  3e-08 to 3e-14 because both sets of rows are solved together. Needs the
+  support and spine in the field spec (`patch_g1.support_constraint`), and
+  composes with the tangency strength. The second-derivative weights
+  (`_second_deriv_weights`) are validated against a position-based second
+  difference.
 - **Patch export** (`geometrykit/export.py`, `scripts/export_flowing_roof.py`):
   occ-free OBJ (quads) and STL writers, plus an **AP214 STEP** writer that
   emits real `B_SPLINE_SURFACE_WITH_KNOTS` faces -- control net, distinct

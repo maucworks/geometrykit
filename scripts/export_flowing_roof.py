@@ -36,6 +36,11 @@ from geometrykit.runtimes._npu import patch_g1, patch_np  # noqa: E402
 # solver's minimum-norm leftover, which is softer). Dial this and re-run.
 TANGENCY = 1.0
 
+# Also match the ribbons' *curvature* across each edge (G2): the patches stop
+# bending away from the ribbon's plane as they leave the edge. The ribbons are
+# flat strips, so this drives their cross-curvature to zero.
+G2 = True
+
 # the mixed-height network: the real non-planar G1 stress case
 PARAMS = {
     "height_sw": 2.4,
@@ -79,7 +84,40 @@ def spine_field(edge, spine, support, oriented, params_u, params_v, towards):
         "slope": _map(spec["slope"]),
         "support": support,
         "spine": spine,
+        "curve_params": curve_params,
     }
+
+
+def curvature_gap(surface, field, edge, t) -> float:
+    """Patch cross-curvature minus the support's, at one boundary station."""
+    step = 1e-5
+    if edge in ("south", "north"):
+        v0 = 0.0 if edge == "south" else 1.0
+        delta = step if edge == "south" else -step
+        first = surface.tangents_at(t, v0)[1]
+        later = surface.tangents_at(t, v0 + delta)[1]
+        normal = surface.normal_at(t, v0)
+    else:
+        u0 = 0.0 if edge == "west" else 1.0
+        delta = step if edge == "west" else -step
+        first = surface.tangents_at(u0, t)[0]
+        later = surface.tangents_at(u0 + delta, t)[0]
+        normal = surface.normal_at(u0, t)
+    second = (
+        (later.x - first.x) / delta,
+        (later.y - first.y) / delta,
+        (later.z - first.z) / delta,
+    )
+    speed = first.x**2 + first.y**2 + first.z**2
+    patch_kappa = (
+        second[0] * normal.x + second[1] * normal.y + second[2] * normal.z
+    ) / speed
+    spine = field["spine"]
+    curve_params = field["curve_params"]
+    support_kappa = patch_g1.support_curvature_field(field["support"], spine)(
+        min(curve_params, key=lambda c: abs(c - t))
+    )
+    return patch_kappa - support_kappa
 
 
 def edge_residual(surface, edge, params, field) -> float:
@@ -128,10 +166,11 @@ def main() -> None:
             for edge, spine, support in zip(patch_g1.EDGE_NAMES, spines, supports)
         }
         surface, _corners, stations = patch_g1.constrained_coons_patch(
-            spines, fields, nu=16, nv=16, tangency=TANGENCY
+            spines, fields, nu=16, nv=16, tangency=TANGENCY, g2=G2
         )
         patches.append((name, surface))
         label = "solver default" if TANGENCY is None else f"tangency {TANGENCY}"
+        label += ", G2" if G2 else ", G1 only"
         print(f"{name} patch built from the kernel ({label})")
         for edge in patch_g1.EDGE_NAMES:
             params = stations[0] if edge in ("south", "north") else stations[1]
@@ -147,9 +186,13 @@ def main() -> None:
                         surface.tangents_at(1.0, t)[0]
                     )
                 slopes.append(abs(cross) / max(patch_g1._cross_extent(surface, edge, t), 1e-9))
+            gaps = []
+            for t in params[2:-2]:
+                gaps.append(abs(curvature_gap(surface, fields[edge], edge, t)))
             print(
                 f"  {edge:>5}: G1 {worst:.3e}   boundary slope "
-                f"{sum(slopes) / len(slopes):.3f} per unit distance"
+                f"{sum(slopes) / len(slopes):.3f}   curvature gap "
+                f"{sum(gaps) / len(gaps):.2e}"
             )
 
     # One file, three named groups, no OCCT twin: the kernel patch, the four

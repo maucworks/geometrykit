@@ -210,6 +210,42 @@ def _ridge_solve(rows: list, unknowns: int, ridge: float) -> list:
     return solution
 
 
+def _second_deriv_weights(flat: list, degree: int) -> tuple:
+    """Weights giving ``S''`` at the two clamped ends from the poles.
+
+    Returns ``(low, high)``: ``{pole_index: weight}`` for ``S''(0)`` and
+    ``S''(1)``. Only three poles contribute at each end.
+    """
+    if degree < 2:
+        return {}, {}
+    n = len(flat) - degree - 1  # number of poles
+    span_lo = flat[degree + 1] - flat[degree]
+    if span_lo <= 0.0:
+        raise G1Error("degenerate knot span at the start of the net")
+    # low end: poles 0, 1, 2
+    first = flat[degree + 1]
+    second = flat[degree + 2]
+    low = {
+        0: 6.0 / (span_lo * span_lo),
+        1: -6.0 * (1.0 / (span_lo * second) + 1.0 / (span_lo * span_lo)),
+        2: 6.0 / (span_lo * second),
+    }
+    del first
+    # high end: the mirror, poles n-1, n-2, n-3
+    span_hi = flat[-degree - 1] - flat[-degree - 2]
+    if span_hi <= 0.0:
+        raise G1Error("degenerate knot span at the end of the net")
+    back_first = 1.0 - flat[-degree - 2]
+    back_second = 1.0 - flat[-degree - 3]
+    high = {
+        n - 1: 6.0 / (span_hi * span_hi),
+        n - 2: -6.0 * (1.0 / (span_hi * back_second) + 1.0 / (span_hi * span_hi)),
+        n - 3: 6.0 / (span_hi * back_second),
+    }
+    del back_first
+    return low, high
+
+
 def _cross_extent(surface, edge: str, t: float) -> float:
     """How far the patch reaches across itself at one boundary station."""
     if edge in ("south", "north"):
@@ -241,6 +277,60 @@ def _support_reach(support, spine, t: float) -> float:
     return min(distances)
 
 
+def support_curvature_field(support, spine, towards=None, step: float = 1e-5, tol: float = 1e-4):
+    """Normal-section curvature of *support* across its spine.
+
+    ``kappa = (d2S/dcross2 . N) / |dS/dcross|^2``, invariant under
+    reparameterisation of the cross direction, so it is directly comparable
+    with the patch's own number. The second derivative comes from a finite
+    difference of the analytic first derivative.
+    """
+    at = support_fields(support, spine, towards=towards, tol=tol)
+
+    def curvature(t: float) -> float:
+        point = spine.point_at(t)
+        _projected, (u, v) = support.project(point)
+        tangent = spine.tangent_at(t)
+        length = (tangent.x**2 + tangent.y**2 + tangent.z**2) ** 0.5
+        t_hat = (tangent.x / length, tangent.y / length, tangent.z / length)
+        su, sv = support.tangents_at(u, v)
+        candidates = [(0, su), (1, sv)]
+        best = None
+        for which, candidate in candidates:
+            cl = (candidate.x**2 + candidate.y**2 + candidate.z**2) ** 0.5
+            if cl < 1e-12:
+                continue
+            align = abs(
+                candidate.x * t_hat[0] + candidate.y * t_hat[1] + candidate.z * t_hat[2]
+            ) / cl
+            if best is None or align < best[0]:
+                best = (align, which)
+        if best is None:
+            raise G1Error("the support has no transverse derivative at the spine")
+        which = best[1]
+        normal, _slope = at(t)
+        if which == 0:
+            first = support.tangents_at(u, v)[0]
+            later = support.tangents_at(u + step, v)[0]
+        else:
+            first = support.tangents_at(u, v)[1]
+            later = support.tangents_at(u, v + step)[1]
+        d = (first.x, first.y, first.z)
+        dd = (
+            (later.x - first.x) / step,
+            (later.y - first.y) / step,
+            (later.z - first.z) / step,
+        )
+        length_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+        if length_sq < 1e-12:
+            raise G1Error("the support's cross derivative vanishes at the spine")
+        return (
+            dd[0] * normal[0] + dd[1] * normal[1] + dd[2] * normal[2]
+        ) / length_sq
+
+    return curvature
+
+
 def support_constraint(support, spine, towards=None, tol: float = 1e-4) -> dict:
     """A G1 field spec for one edge, carrying its support and spine.
 
@@ -264,6 +354,7 @@ def solve_g1_constraints(
     ridge: float = 1e-10,
     corner_stations: int = 1,
     tangency: float | None = None,
+    g2_edges: "Sequence[str] | None" = None,
 ):
     """P-1: enforce the G1 tangent-plane rows on a P-0 Coons patch.
 
@@ -274,6 +365,11 @@ def solve_g1_constraints(
                             `EDGE_NAMES`; an absent edge stays G0.
         ridge:              relative Tikhonov weight -- ties the under-
                             determined system to the smallest patch change.
+        g2_edges:           edges whose *curvature* across the boundary must
+                            also match the support's (G2). Runs as a second
+                            pass over the G1 result, so the tangent plane is
+                            already in place. Needs the support and spine in
+                            the field spec.
         tangency:           G1 only fixes the *direction* of the boundary
                             cross-derivative, leaving its magnitude to the
                             solve. Give a factor to control that magnitude:
@@ -440,7 +536,7 @@ def solve_g1_constraints(
             base_p[1] + solution[3 * k + 1],
             base_p[2] + solution[3 * k + 2],
         )
-    return Surface(
+    result = Surface(
         control_points=out,
         uknots=list(surface.uknots),
         vknots=list(surface.vknots),
@@ -448,6 +544,18 @@ def solve_g1_constraints(
         vmults=list(surface.vmults),
         udegree=qu,
         vdegree=qv,
+    )
+    if not g2_edges:
+        return result
+    return _refine_g2(
+        result,
+        params_u,
+        params_v,
+        edge_normal_fields,
+        g2_edges,
+        ridge=ridge,
+        corner_stations=corner_stations,
+        tangency=tangency,
     )
 
 
@@ -523,6 +631,213 @@ def normal_field_from_support(support, spine, tol: float = 1e-4):
     return normal_at
 
 
+def _refine_g2(
+    surface,
+    params_u,
+    params_v,
+    edge_normal_fields,
+    g2_edges,
+    ridge: float = 1e-10,
+    corner_stations: int = 1,
+    tangency: float | None = None,
+):
+    """Second pass: match the support's cross-curvature on *g2_edges*.
+
+    The G1 rows are rebuilt unchanged (so the tangent plane cannot drift) and
+    the curvature rows are added:
+
+        (S_vv(u,0) . N) = kappa_support(u) * |S_v(u,0)|^2
+
+    with ``|S_v|`` and ``kappa_support`` taken from the G1 result. The band is
+    widened to the poles that carry ``S_vv`` (rows 1 and 2 at each end, and the
+    matching columns).
+    """
+    from geometrykit.geometry.surface import Surface
+
+    qu, qv = surface.udegree, surface.vdegree
+    flat_u = _flat_knots(surface.uknots, surface.umults)
+    flat_v = _flat_knots(surface.vknots, surface.vmults)
+    span_v_lo = flat_v[qv + 1] - flat_v[qv]
+    span_v_hi = flat_v[-qv - 1] - flat_v[-qv - 2]
+    span_u_lo = flat_u[qu + 1] - flat_u[qu]
+    span_u_hi = flat_u[-qu - 1] - flat_u[-qu - 2]
+    low_v, high_v = _second_deriv_weights(flat_v, qv)
+    low_u, high_u = _second_deriv_weights(flat_u, qu)
+
+    net = [[(p.x, p.y, p.z) for p in row] for row in surface.control_points]
+    n_u = len(net)
+    n_v = len(net[0])
+
+    band = set()
+    for i in range(1, n_u - 1):
+        for j in (1, 2, n_v - 3, n_v - 2):
+            band.add((i, j))
+    for j in range(1, n_v - 1):
+        for i in (1, 2, n_u - 3, n_u - 2):
+            band.add((i, j))
+    band = sorted(band)
+    index = {point: 3 * k for k, point in enumerate(band)}
+    if not band:
+        raise G1Error("patch net too small to carry G2 constraints")
+
+    rows = []
+
+    def dot3(a, b) -> float:
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+    # ── the G1 rows again, so the tangent plane is preserved exactly
+    for edge in EDGE_NAMES:
+        field = edge_normal_fields.get(edge)
+        if field is None:
+            continue
+        if edge in ("south", "north"):
+            samples = _field_samples(field, params_u, corner_stations)
+            low = edge == "south"
+            factor = (qv / span_v_lo) if low else (qv / span_v_hi)
+            inner_row = 1 if low else n_v - 2
+            outer_row = 0 if low else n_v - 1
+            for t, normal in samples:
+                coefs = {}
+                residual = 0.0
+                for i, n_i in _nonzero_basis(t, qu, flat_u).items():
+                    if not 0 <= i < n_u:
+                        continue
+                    inner = net[i][inner_row]
+                    outer = net[i][outer_row]
+                    delta = (
+                        inner[0] - outer[0],
+                        inner[1] - outer[1],
+                        inner[2] - outer[2],
+                    )
+                    coefficient = factor * n_i
+                    residual += coefficient * dot3(delta, normal)
+                    base_index = index.get((i, inner_row))
+                    if base_index is None:
+                        continue
+                    for comp in range(3):
+                        coefs[base_index + comp] = coefficient * normal[comp]
+                rows.append((coefs, -residual))
+        else:
+            samples = _field_samples(field, params_v, corner_stations)
+            low = edge == "west"
+            factor = (qu / span_u_lo) if low else (qu / span_u_hi)
+            inner_col = 1 if low else n_u - 2
+            outer_col = 0 if low else n_u - 1
+            for t, normal in samples:
+                coefs = {}
+                residual = 0.0
+                for j, n_j in _nonzero_basis(t, qv, flat_v).items():
+                    if not 0 <= j < n_v:
+                        continue
+                    inner = net[inner_col][j]
+                    outer = net[outer_col][j]
+                    delta = (
+                        inner[0] - outer[0],
+                        inner[1] - outer[1],
+                        inner[2] - outer[2],
+                    )
+                    coefficient = factor * n_j
+                    residual += coefficient * dot3(delta, normal)
+                    base_index = index.get((inner_col, j))
+                    if base_index is None:
+                        continue
+                    for comp in range(3):
+                        coefs[base_index + comp] = coefficient * normal[comp]
+                rows.append((coefs, -residual))
+
+    # ── the curvature rows
+    for edge in EDGE_NAMES:
+        if edge not in g2_edges:
+            continue
+        field = edge_normal_fields.get(edge)
+        if field is None:
+            continue
+        support = field.get("support") if isinstance(field, dict) else None
+        spine = field.get("spine") if isinstance(field, dict) else None
+        if support is None or spine is None:
+            raise G1Error(
+                f"a G2 constraint on '{edge}' needs the support and its spine in "
+                "the field spec -- build it with patch_g1.support_constraint"
+            )
+        towards = Vec(
+            sum(net[i][j][0] for i in (1, n_u - 2) for j in (1, n_v - 2)) / 4.0,
+            sum(net[i][j][1] for i in (1, n_u - 2) for j in (1, n_v - 2)) / 4.0,
+            sum(net[i][j][2] for i in (1, n_u - 2) for j in (1, n_v - 2)) / 4.0,
+        )
+        curvature = support_curvature_field(support, spine, towards=towards)
+        low = edge in ("south", "west")
+        weights = low_v if edge in ("south", "north") else low_u
+        if not low:
+            weights = high_v if edge in ("south", "north") else high_u
+        varying = params_u if edge in ("south", "north") else params_v
+        flat_varying = flat_u if edge in ("south", "north") else flat_v
+        degree_varying = qu if edge in ("south", "north") else qv
+        n_varying = n_u if edge in ("south", "north") else n_v
+        samples = _field_samples(field, varying, corner_stations)
+
+        for t, normal in samples:
+            # the support's curvature and the patch's own first derivative
+            patch_params = (
+                params_u if edge in ("south", "north") else params_v
+            )
+            del patch_params
+            t_support = t
+            kappa = curvature(t_support)
+            if edge == "south":
+                first = surface.tangents_at(t, 0.0)[1]
+            elif edge == "north":
+                first = surface.tangents_at(t, 1.0)[1]
+            elif edge == "west":
+                first = surface.tangents_at(0.0, t)[0]
+            else:
+                first = surface.tangents_at(1.0, t)[0]
+            speed_sq = first.x**2 + first.y**2 + first.z**2
+            target = kappa * speed_sq
+
+            coefs = {}
+            residual = 0.0
+            for i, n_i in _nonzero_basis(t, degree_varying, flat_varying).items():
+                if not 0 <= i < n_varying:
+                    continue
+                for pole_index, weight in weights.items():
+                    if not 0 <= pole_index < (n_v if edge in ("south", "north") else n_u):
+                        continue
+                    if edge in ("south", "north"):
+                        point = (i, pole_index)
+                        value = net[i][pole_index]
+                    else:
+                        point = (pole_index, i)
+                        value = net[pole_index][i]
+                    coefficient = n_i * weight
+                    residual += coefficient * dot3(value, normal)
+                    base_index = index.get(point)
+                    if base_index is None:
+                        continue
+                    for comp in range(3):
+                        coefs[base_index + comp] = coefficient * normal[comp]
+            rows.append((coefs, target - residual))
+
+    unknowns = 3 * len(band)
+    solution = _ridge_solve(rows, unknowns, ridge)
+    out = [[Vec(p[0], p[1], p[2]) for p in row] for row in net]
+    for k, (i, j) in enumerate(band):
+        base_p = net[i][j]
+        out[i][j] = Vec(
+            base_p[0] + solution[3 * k],
+            base_p[1] + solution[3 * k + 1],
+            base_p[2] + solution[3 * k + 2],
+        )
+    return Surface(
+        control_points=out,
+        uknots=list(surface.uknots),
+        vknots=list(surface.vknots),
+        umults=list(surface.umults),
+        vmults=list(surface.vmults),
+        udegree=qu,
+        vdegree=qv,
+    )
+
+
 def constrained_coons_patch(
     curves: Sequence,
     edge_normal_fields: dict,
@@ -533,6 +848,7 @@ def constrained_coons_patch(
     ridge: float = 1e-10,
     corner_stations: int = 1,
     tangency: float | None = None,
+    g2: bool = False,
 ):
     """P-1 entry point: G1-constrained discrete Coons patch.
 
@@ -547,11 +863,15 @@ def constrained_coons_patch(
         tol:                corner coincidence tolerance.
         degree:             tensor-interpolation degree.
         ridge:              relative Tikhonov weight of the G1 solve.
-        tangency:           optional tangency strength -- the magnitude of the
-                            boundary cross-derivative, as a factor on the
-                            Coons base's in-plane slope (``1.0`` keeps it,
-                            higher is stiffer). ``None`` leaves it to the
-                            minimum-norm solve.
+        tangency:           optional tangency strength -- the boundary
+                            cross-derivative's magnitude as a multiple of the
+                            support's own slope (``1.0`` matches it, higher is
+                            stiffer). ``None`` leaves it to the minimum-norm
+                            solve.
+        g2:                 also match the support's cross-curvature across
+                            every G1 edge (curvature continuity), as a second
+                            pass over the G1 result. Needs the support and
+                            spine in each field spec.
         corner_stations:    stations dropped at each end of an edge (the
                             corner band, where the boundary curves pin
                             the cross-derivative).
@@ -571,5 +891,6 @@ def constrained_coons_patch(
         ridge=ridge,
         corner_stations=corner_stations,
         tangency=tangency,
+        g2_edges=list(EDGE_NAMES) if g2 else None,
     )
     return fixed, corners, (params_u, params_v)
