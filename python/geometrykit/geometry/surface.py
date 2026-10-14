@@ -681,23 +681,22 @@ class Surface:
                     "(the adjacent face that defines the tangent direction)."
                 )
 
+        patch_mid = Vec(
+            sum(c.point_at(0.5).x for c in curves) / n,
+            sum(c.point_at(0.5).y for c in curves) / n,
+            sum(c.point_at(0.5).z for c in curves) / n,
+        )
+
         filler = BRepOffsetAPI_MakeFilling()
         filler.SetConstrParam(tol, tol, 2 * tol, 2 * tol)
 
         for i, curve in enumerate(curves):
             gc = full_constraints[i]
             supp = supports[i] if supports and i < len(supports) else None
-            if supp is not None and gc == GeomAbs_G1:
-                occ_face = getattr(supp, "_occ_face", None)
-                occ_edge = getattr(supp, "_occ_edge", None)
-                if occ_face is not None and occ_edge is not None:
-                    filler.Add(occ_edge, occ_face, gc)
-                else:
-                    edge = _build_occ_edge(curve)
-                    filler.Add(edge, _build_occ_face(supp), gc)
-            elif supp is not None:
-                edge = _build_occ_edge(curve)
-                filler.Add(edge, _build_occ_face(supp), gc)
+            if supp is not None:
+                # the constraint edge must be the support face's own edge
+                face, edge = _support_face_and_edge(supp, curve, patch_mid)
+                filler.Add(edge, face, gc)
             else:
                 edge = _build_occ_edge(curve)
                 filler.Add(edge, gc)
@@ -752,12 +751,18 @@ class Surface:
         angle_end_deg: float | None = None,
         angles_deg: "Sequence[float] | None" = None,
         n_pts: int = 20,
+        symmetric: bool = False,
     ) -> "Surface":
         """Create a ribbon (ruled support surface) along a curve.
 
-        The ribbon shares one exact edge with *curve* and extends outward
-        by *width* at the given *angles*.  The result is used as a G1
-        support surface in :meth:`patch`.
+        The result is used as a G1 support surface in :meth:`patch`. By
+        default the ribbon shares one exact edge with *curve* and extends
+        outward by *width* at the given *angles* (a one-sided ribbon, the
+        spine on a boundary edge). With ``symmetric=True`` the spine runs
+        down the **middle** of the ribbon, which is offset ``width / 2`` to
+        either side -- the CATIA-style tangency support, where the constraint
+        is read on the spine rather than on one side of it, so the same
+        support serves a patch on either side of the curve.
 
         ``angles`` is a list of rotation angles (**radians**) around the
         curve tangent (0 = horizontal perpendicular).  With one angle
@@ -778,6 +783,7 @@ class Surface:
             angle_end_deg: End angle (degrees).
             angles_deg:    Angles list in degrees (overrides *angles*).
             n_pts:         Number of samples for the offset curve.
+            symmetric:     Centre the ribbon on *curve* (spine in the middle).
 
         Returns:
             A new Surface suitable as G1 support for :meth:`patch`.
@@ -801,7 +807,6 @@ class Surface:
         require_occ()
 
         from OCC.Core.BRep import BRep_Tool
-        from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
         from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeWire
         from OCC.Core.Geom import Geom_BSplineSurface
         from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE
@@ -821,9 +826,8 @@ class Surface:
             frac = pos - i
             return ang_list[i] + frac * (ang_list[i + 1] - ang_list[i])
 
-        off_pts: "list[Vec]" = []
-        for i in range(n_pts):
-            t = i / (n_pts - 1)
+        def _cross(t) -> tuple:
+            """Point on the spine and the unit cross direction there."""
             p = curve.point_at(t)
             tan = curve.tangent_at(t)
             perp = (tan**up).normalized()
@@ -831,16 +835,42 @@ class Surface:
             if abs(a) > 1e-12:
                 c, s = math.cos(a), math.sin(a)
                 perp = perp * c + up * s
-            off_pts.append(p + perp * width)
+            return p, perp
+
+        near_pts: "list[Vec]" = []
+        far_pts: "list[Vec]" = []
+        for i in range(n_pts):
+            t = i / (n_pts - 1)
+            p, perp = _cross(t)
+            if symmetric:
+                near_pts.append(p - perp * (width / 2.0))
+                far_pts.append(p + perp * (width / 2.0))
+            else:
+                near_pts.append(p)
+                far_pts.append(p + perp * width)
 
         # ── Ruled surface between curve and offset curve ──────────
         from OCC.Core.BRepFill import BRepFill_Generator
 
         from geometrykit.geometry.curve import Curve as _Curve
 
-        offset = _Curve.from_points(off_pts)
-        e1 = _build_occ_edge(curve)
-        e2 = _build_occ_edge(offset)
+        # One-sided: the spine itself is a rail, exactly as given (no
+        # re-parameterisation). Symmetric: both rails are offsets of the
+        # spine's control net, so the spine lies exactly on the middle line
+        # v = 0.5 -- a ruled surface between same-parameterised rails
+        # interpolates their average there.
+        def _perp_at(t):
+            _p, perp = _cross(t)
+            return perp
+
+        if symmetric:
+            rail_a = _offset_control_net(curve, -width / 2.0, _perp_at)
+            rail_b = _offset_control_net(curve, +width / 2.0, _perp_at)
+        else:
+            rail_a = curve
+            rail_b = _Curve.from_points(far_pts)
+        e1 = _build_occ_edge(rail_a)
+        e2 = _build_occ_edge(rail_b)
         w1 = BRepBuilderAPI_MakeWire(e1).Wire()
         w2 = BRepBuilderAPI_MakeWire(e2).Wire()
 
@@ -855,7 +885,12 @@ class Surface:
             raise RuntimeError("Ribbon generator produced no face")
         ribbon_face = exp_g.Current()
 
-        geom = BRepAdaptor_Surface(ribbon_face).Surface().Surface()
+        # BRep_Tool.Surface hands back a reference-counted handle. Going via
+        # BRepAdaptor_Surface(...).Surface().Surface() would keep the geometry
+        # alive only through a temporary adaptor, which dangles once that
+        # adaptor is collected -- and a later MakeFilling on the stored ribbon
+        # then segfaults.
+        geom = BRep_Tool.Surface(ribbon_face)
 
         # Find the edge in the ribbon face that matches the curve
         p0_crv = curve.point_at(0)
@@ -895,7 +930,7 @@ class Surface:
                 t = i / (n - 1)
                 p = curve.point_at(t)
                 pts.SetValue(i + 1, 1, gp_Pnt(p.x, p.y, p.z))
-                off = off_pts[i]
+                off = far_pts[i]
                 pts.SetValue(i + 1, 2, gp_Pnt(off.x, off.y, off.z))
             occ_surf = GeomAPI_PointsToBSplineSurface(
                 pts,
@@ -914,6 +949,36 @@ class Surface:
             result._occ_face = ribbon_face
             result._occ_edge = curve_edge
         return result
+
+
+def _offset_control_net(curve: "Curve", distance: float, perp_at) -> "Curve":
+    """Offset *curve* by *distance* along its cross direction, keeping its
+    knot vector, degree and parameterisation.
+
+    ``perp_at(t)`` returns the unit cross direction at parameter ``t``. Each
+    control point moves by ``distance * perp_at(greville_i)``, so the offset
+    rail is parameterised exactly like the spine and their average is the
+    spine again.
+    """
+    from geometrykit.geometry.curve import Curve as _Curve
+
+    flat: list = []
+    for knot, mult in zip(curve.knots, curve.multiplicities):
+        flat.extend([float(knot)] * int(mult))
+    degree = curve.degree
+    points = []
+    for index, point in enumerate(curve.points):
+        # Greville abscissa of this control point
+        window = flat[index + 1 : index + degree + 1]
+        t = sum(window) / len(window) if window else 0.0
+        perp = perp_at(t)
+        points.append(point + perp * distance)
+    return _Curve(
+        control_points=points,
+        knots=list(curve.knots),
+        multiplicities=list(curve.multiplicities),
+        degree=degree,
+    )
 
 
 def _build_occ_edge(curve: "Curve") -> object:
@@ -1236,6 +1301,78 @@ def occ_intersect_plane(surf: Surface, plane: "Plane") -> List["Curve"]:
 # ---------------------------------------------------------------------------
 # Tessellation
 # ---------------------------------------------------------------------------
+
+
+def _face_edge_on(face, point: Vec):
+    """The edge of *face* whose midpoint is closest to *point*."""
+    from OCC.Core.BRep import BRep_Tool
+    from OCC.Core.TopAbs import TopAbs_EDGE
+    from OCC.Core.TopExp import TopExp_Explorer
+
+    best = None
+    best_distance = None
+    explorer = TopExp_Explorer(face, TopAbs_EDGE)
+    while explorer.More():
+        edge = explorer.Current()
+        handle = BRep_Tool.Curve(edge)[0]
+        if handle is not None:
+            first, last = BRep_Tool.Curve(edge)[1], BRep_Tool.Curve(edge)[2]
+            middle = handle.Value((first + last) / 2.0)
+            gap = (
+                (middle.X() - point.x) ** 2
+                + (middle.Y() - point.y) ** 2
+                + (middle.Z() - point.z) ** 2
+            )
+            if best_distance is None or gap < best_distance:
+                best, best_distance = edge, gap
+        explorer.Next()
+    if best is None:
+        raise RuntimeError("support face has no edge to attach the constraint to")
+    return best
+
+
+def _support_face_and_edge(supp: Surface, curve: "Curve", towards: Vec):
+    """The support face that carries *curve* on its boundary, and that edge.
+
+    One-sided ribbons arrive with a cached (face, edge) pair whose edge is the
+    spine. A symmetric ribbon carries the spine down the middle, so the face is
+    bounded at the spine -- the half on the side of *towards*, which has the
+    same tangent plane along the spine -- and the resulting edge is returned.
+    MakeFilling needs the face's own edge, not a rebuilt one.
+    """
+    from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+    from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+
+    cached_face = getattr(supp, "_occ_face", None)
+    cached_edge = getattr(supp, "_occ_edge", None)
+    if cached_face is not None and cached_edge is not None:
+        return cached_face, cached_edge
+
+    geometry = _build_occ_surface(supp)
+    full = BRepBuilderAPI_MakeFace(geometry, 1e-6).Face()
+    bounds = BRepAdaptor_Surface(full)
+    u0, u1 = bounds.FirstUParameter(), bounds.LastUParameter()
+    v0, v1 = bounds.FirstVParameter(), bounds.LastVParameter()
+
+    middle = curve.point_at(0.5)
+    _projected, (_u, v_spine) = supp.project(middle)
+    span = max(abs(v1 - v0), 1e-12)
+    if min(abs(v_spine - v0), abs(v_spine - v1)) < 1e-6 * span:
+        face = full
+    else:
+        u_mid = (u0 + u1) / 2.0
+
+        def _mid_point(v_lo, v_hi) -> Vec:
+            point = bounds.Value(u_mid, (v_lo + v_hi) / 2.0)
+            return Vec(point.X(), point.Y(), point.Z())
+
+        lower = _mid_point(v0, v_spine)
+        upper = _mid_point(v_spine, v1)
+        if abs(lower - towards) <= abs(upper - towards):
+            face = BRepBuilderAPI_MakeFace(geometry, u0, u1, v0, v_spine, 1e-6).Face()
+        else:
+            face = BRepBuilderAPI_MakeFace(geometry, u0, u1, v_spine, v1, 1e-6).Face()
+    return face, _face_edge_on(face, middle)
 
 
 def _build_occ_face(surf: Surface) -> object:

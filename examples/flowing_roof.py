@@ -8,7 +8,8 @@ The pipeline, stage by stage (each stage maps to kernel milestones):
 2. six corners where those curves meet, each with its associated
    ribbons — `Surface.ribbon`, OCCT-gated until M6;
 3. two G1-constrained patches over the shared `top` curve — M7/M8
-   (OCCT twin until then);
+   (OCCT twin until then); the ridge ribbon is shared, so it is symmetric
+   (spine in the middle) and the constraint is read on the spine;
 4. an array of planes intersected with both patches — plane×surface
    sectioning (M5), OCCT-gated;
 5. the intersection curves rationalized into bi-arc chains —
@@ -83,7 +84,7 @@ def build_curves(params: dict) -> RoofGeometry:
     height_ne = params["height_ne"]
     height_nnw = params["height_nnw"]
     height_nne = params["height_nne"]
-    twist = params["twist"]
+    # the twist lives in build_ribbons; the curves only need the heights
     width, height = g.width, g.height
 
     g.miters = _make_miters(width, height, g.ipe_height)
@@ -141,15 +142,23 @@ def build_curves(params: dict) -> RoofGeometry:
 
 
 def build_ribbons(g: RoofGeometry, twist: int = 25) -> RoofGeometry:
-    """Stage 2 (M6, OCCT twin today): the seven ribbons."""
+    """Stage 2 (M6, OCCT twin today): the seven ribbons.
+
+    Every ribbon is **symmetric**: its spine curve runs down the middle of the
+    strip, so the tangent plane is read on the spine rather than on one side of
+    it, and the same support serves a patch on either side of the curve. That
+    matters at the ridge, where one ribbon constrains two patches.
+    """
     g.ribbons = {
-        "top": Surface.ribbon(g.top, angles_deg=[180, 180 - twist, 180], width=1),
-        "bot": Surface.ribbon(g.bottom, angle_deg=0, width=1),
-        "left": Surface.ribbon(g.left, angle_deg=0, width=1),
-        "right": Surface.ribbon(g.right, angle_deg=0, width=1),
-        "top2": Surface.ribbon(g.top2, angle_deg=180, width=1),
-        "right2": Surface.ribbon(g.right2, angle_deg=180, width=1),
-        "left2": Surface.ribbon(g.left2, angle_deg=180, width=1),
+        "top": Surface.ribbon(
+            g.top, angles_deg=[180, 180 - twist, 180], width=1, symmetric=True
+        ),
+        "bot": Surface.ribbon(g.bottom, angle_deg=0, width=1, symmetric=True),
+        "left": Surface.ribbon(g.left, angle_deg=0, width=1, symmetric=True),
+        "right": Surface.ribbon(g.right, angle_deg=0, width=1, symmetric=True),
+        "top2": Surface.ribbon(g.top2, angle_deg=180, width=1, symmetric=True),
+        "right2": Surface.ribbon(g.right2, angle_deg=180, width=1, symmetric=True),
+        "left2": Surface.ribbon(g.left2, angle_deg=180, width=1, symmetric=True),
     }
     return g
 

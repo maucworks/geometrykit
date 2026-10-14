@@ -50,6 +50,11 @@ function of the *patch* parameter:
 
 Station parameters come from `patch_np.coons_parametrization`; map a field
 that lives in curve-parameter space with `patch_np.edge_curve_params`.
+
+A field is most robustly obtained from the support surface itself with
+`normal_field_from_support`: it projects the spine onto the support and reads
+the normal there, so it does not care whether the support is one-sided
+(spine on an edge) or symmetric (spine in the middle).
 """
 
 from __future__ import annotations
@@ -329,6 +334,43 @@ def solve_g1_constraints(
         udegree=qu,
         vdegree=qv,
     )
+
+
+def normal_field_from_support(support, spine, tol: float = 1e-4):
+    """Constraint normals read off a support surface along its spine.
+
+    The station is *located on the support by projection*, so the support may
+    be a one-sided ribbon (spine on its boundary), a symmetric ribbon (spine
+    in the middle) or a full support shell -- the caller never has to guess
+    which boundary edge carries the spine. This is the contract a CAD system
+    uses for a tangency support: the spine curve is what the constraint is
+    attached to, and the support supplies the tangent plane there.
+
+    Args:
+        support: any `Surface` that carries the constraint plane.
+        spine:   the `Curve` the constraint is attached to (a patch boundary).
+        tol:     how far the spine may sit off the support before raising.
+
+    Returns:
+        A callable ``t -> (nx, ny, nz)`` of the *spine* parameter, giving the
+        unit normal of the support at the projection of ``spine(t)``. Compose
+        it with `patch_np.edge_curve_params` to get a field in patch
+        parameter space.
+    """
+
+    def at(t: float) -> tuple:
+        point = spine.point_at(t)
+        projected, (u, v) = support.project(point)
+        gap = abs(projected - point)
+        if gap > tol:
+            raise G1Error(
+                f"the spine misses its support by {gap:.3e} at t={t:.4f} "
+                f"(tol {tol:.1e}) -- wrong support for this curve?"
+            )
+        normal = support.normal_at(u, v)
+        return _unit((normal.x, normal.y, normal.z))
+
+    return at
 
 
 def constrained_coons_patch(

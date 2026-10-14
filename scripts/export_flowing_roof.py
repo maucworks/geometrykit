@@ -3,8 +3,7 @@
 
 Run in an env with pythonocc (the ribbon normals and the twin):
 
-    /opt/miniconda3/envs/a320-ifc-configurator/bin/python \
-        scripts/export_flowing_roof.py
+    conda run -n geometrykit-oracle python scripts/export_flowing_roof.py
 
 Output goes to ``wip/flowing-roof-eval/`` (gitignored scratch: generated
 results are inspected, not committed).
@@ -16,7 +15,6 @@ surfaces) and the twin comparison need pythonocc.
 from __future__ import annotations
 
 import importlib.util
-import math
 import sys
 from pathlib import Path
 
@@ -52,32 +50,20 @@ EDGES = (
 )
 
 
-def ribbon_field(edge, curve, ribbon, oriented, params_u, params_v):
-    """A patch-parameter -> ribbon-normal callable for one edge.
+def spine_field(edge, spine, support, oriented, params_u, params_v):
+    """The constraint normal of *edge*, read on *support*'s spine.
 
-    Maps each patch station onto the edge curve's own parameter (a drawn
-    direction may run opposite to the patch's sampled direction) and reads
-    the ribbon's normal on the long edge it shares with that curve.
+    The spine is located on the support by projection (see
+    ``patch_g1.normal_field_from_support``), so it does not matter whether the
+    ribbon is one-sided or symmetric, nor how either is parameterised.
     """
     patch_params = params_u if edge in ("south", "north") else params_v
     curve_params = patch_np.edge_curve_params(oriented, edge, patch_params)
+    on_spine = patch_g1.normal_field_from_support(support, spine)
 
     def at(t):
         k = min(range(len(curve_params)), key=lambda m: abs(curve_params[m] - t))
-        t_curve = curve_params[k]
-        base = curve.point_at(t_curve)
-        best = None
-        for v_edge in (0.0, 1.0):
-            p = ribbon.point_at(t_curve, v_edge)
-            d = abs(p - base)
-            if best is None or d < best[0]:
-                best = (d, v_edge)
-        dist, v_edge = best
-        if dist > 1e-4:
-            raise SystemExit(f"{edge}: ribbon misses the curve at t={t_curve} ({dist:.2e})")
-        n = ribbon.normal_at(t_curve, v_edge)
-        ln = math.sqrt(n.x**2 + n.y**2 + n.z**2) or 1.0
-        return (n.x / ln, n.y / ln, n.z / ln)
+        return on_spine(curve_params[k])
 
     return at
 
@@ -107,35 +93,51 @@ def main() -> None:
     out_dir = ROOT / "wip" / "flowing-roof-eval"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    curves = [g.bottom, g.right, g.top, g.left]
-    params_u, params_v, oriented = patch_np.coons_parametrization(curves, nu=16, nv=16)
-    fields = {
-        edge: ribbon_field(edge, curve, g.ribbons[ribbon_name], oriented, params_u, params_v)
-        for edge, ribbon_name in EDGES
-        for curve in [curves[[e for e, _r in EDGES].index(edge)]]
-    }
-    p1_surf, _corners, stations = patch_g1.constrained_coons_patch(
-        curves, fields, nu=16, nv=16
+    # Two patches over the shared ridge curve, exactly like the example:
+    # front = bottom/right/top/left, back = top/right2/top2/left2.
+    networks = (
+        ("Front", ["bottom", "right", "top", "left"], ["bot", "right", "top", "left"]),
+        ("Back", ["top", "right2", "top2", "left2"], ["top", "right2", "top2", "left2"]),
     )
-
-    worst = 0.0
-    for i in range(1, 16):
-        for j in range(1, 16):
-            u, v = i / 16.0, j / 16.0
-            ours = p1_surf.point_at(u, v)
-            twin, _uv = g.surf.project(ours)
-            worst = max(worst, abs(ours - twin))
-    print(f"P-1 kernel patch built; max deviation from the OCCT twin: {worst:.4f}")
-    for edge in patch_g1.EDGE_NAMES:
-        params = stations[0] if edge in ("south", "north") else stations[1]
-        print(f"  G1 residual {edge:>5}: {edge_residual(p1_surf, edge, params, fields[edge]):.3e}")
+    patches = []
+    for name, spine_names, support_names in networks:
+        spines = [getattr(g, n) for n in spine_names]
+        supports = [g.ribbons[n] for n in support_names]
+        params_u, params_v, oriented = patch_np.coons_parametrization(spines, nu=16, nv=16)
+        fields = {
+            edge: spine_field(edge, spine, support, oriented, params_u, params_v)
+            for edge, spine, support in zip(patch_g1.EDGE_NAMES, spines, supports)
+        }
+        surface, _corners, stations = patch_g1.constrained_coons_patch(
+            spines, fields, nu=16, nv=16
+        )
+        patches.append((name, surface))
+        print(f"{name} patch built from the kernel")
+        for edge in patch_g1.EDGE_NAMES:
+            params = stations[0] if edge in ("south", "north") else stations[1]
+            print(
+                f"  G1 residual {edge:>5}: "
+                f"{edge_residual(surface, edge, params, fields[edge]):.3e}"
+            )
 
     # One file, three named groups, no OCCT twin: the kernel patch, the four
     # constraint ribbons it was solved against, and the seven edge curves the
     # network is made of. A zebra or curvature analysis across the patch to
     # ribbon seams is the visual counterpart of the G1 residuals above.
-    surfaces = [p1_surf] + [g.ribbons[name] for _edge, name in EDGES]
-    surface_labels = ["PatchKernelG1"] + [f"Ribbon_{edge}" for edge, _name in EDGES]
+    surfaces = [surface for _name, surface in patches]
+    surface_labels = [f"Patch{name}" for name, _surface in patches]
+    ribbon_labels = (
+        ("bot", "Ribbon_front_eave"),
+        ("right", "Ribbon_front_east"),
+        ("top", "Ribbon_ridge_shared"),
+        ("left", "Ribbon_front_west"),
+        ("right2", "Ribbon_back_east"),
+        ("top2", "Ribbon_back_eave"),
+        ("left2", "Ribbon_back_west"),
+    )
+    for ribbon_name, label in ribbon_labels:
+        surfaces.append(g.ribbons[ribbon_name])
+        surface_labels.append(label)
     edges = [
         ("Edge_bottom", g.bottom),
         ("Edge_right", g.right),
