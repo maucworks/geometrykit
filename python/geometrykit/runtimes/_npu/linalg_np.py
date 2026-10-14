@@ -302,23 +302,47 @@ _PLATE_STENCIL = (
 )
 
 
-def plate_fill(values: list, nx: int, ny: int, ridge: float = 1e-9) -> list:
-    """Fill a grid interior with a simply-supported plate through its boundary.
+def plate_fill(
+    values: list,
+    nx: int,
+    ny: int,
+    slopes: dict | None = None,
+    steps: tuple = (1.0, 1.0),
+) -> list:
+    """Fill a grid interior with a minimising plate through its boundary data.
 
     ``values`` is a flat row-major list of ``(x, y, z)`` triples, ``(nx+1)`` by
     ``(ny+1)``, with the boundary ring already set to the boundary data; the
     interior is replaced by the solution of the thin-plate equation.
 
-    The biharmonic is fourth order, so Dirichlet data alone leaves it
-    under-determined: the second condition is the *simply supported* one — zero
-    normal curvature on the boundary — imposed here by the odd reflection
-    ``u_ghost = 2 u_edge - u_inner``. That is what makes the problem well posed
-    without ghost unknowns, and it is why a bilinear-plus-linear datum
-    (``x*y``, which satisfies both conditions) is reproduced exactly.
+    The biharmonic is fourth order, so boundary data alone leaves it
+    under-determined -- one more condition per boundary station is needed.
+    Two closures are available, per side:
 
-    A tiny ridge is added for safety against a near-null direction; the
-    operator's own null space (the affine functions) is killed by the Dirichlet
-    ring, so it should not be needed, but it costs nothing.
+    - **simply supported** (the default): zero cross-curvature on the
+      boundary, imposed by the reflection ``u_ghost = 2 u_edge - u_inner``.
+      This is what makes the fill well posed with no ghost unknowns, and it
+      is why a bilinear-plus-linear datum (``x*y``, which satisfies both
+      conditions) is reproduced exactly;
+    - **clamped** (a side with slope data in ``slopes``): the ghost is
+      eliminated by the cross-derivative condition instead,
+      ``u_ghost = u_inner -+ 2*step*slope`` -- the G1 condition as a boundary
+      condition of the PDE rather than a correction on a finished surface.
+      The relation is exact for affine slope data, so ``x*y`` and ``x**2``
+      are reproduced exactly under it too.
+
+    ``slopes`` (optional) maps a side name -- ``"west"``, ``"east"``,
+    ``"south"``, ``"north"`` -- to a list of 3-vectors, one per station *along*
+    that side (west/east: ``ny+1`` entries indexed by the second grid index;
+    south/north: ``nx+1`` entries by the first). Each vector is the demanded
+    cross-derivative *per unit grid parameter in the increasing-index
+    direction* at that station; the ``-+`` sign above folds the side's
+    orientation, so callers on the west/south sides pass the slope as-wanted,
+    east/north sides pass it negated. Sides absent from the dict fall back to
+    the simply-supported closure. ``steps`` is the uniform grid spacing
+    ``(du, dv)`` in the two grid directions.
+
+    Returns the filled grid with the boundary ring untouched.
     """
     stride = ny + 1
     unknown = [
@@ -329,19 +353,40 @@ def plate_fill(values: list, nx: int, ny: int, ridge: float = 1e-9) -> list:
     rows: list = [dict() for _ in range(n)]
     rhs: list = [[0.0, 0.0, 0.0] for _ in range(n)]
 
-    def reference(i: int, j: int) -> dict:
-        """In-grid points a stencil reference expands to, by the reflection."""
-        if 0 <= i <= nx and 0 <= j <= ny:
-            return {(i, j): 1.0}
-        if i < 0:
-            return _sum_references(reference(0, j), 2.0, reference(1, j), -1.0)
-        if i > nx:
-            return _sum_references(reference(nx, j), 2.0, reference(nx - 1, j), -1.0)
-        if j < 0:
-            return _sum_references(reference(i, 0), 2.0, reference(i, 1), -1.0)
-        return _sum_references(reference(i, ny), 2.0, reference(i, ny - 1), -1.0)
+    du, dv = steps
+    west = None if slopes is None else slopes.get("west")
+    east = None if slopes is None else slopes.get("east")
+    south = None if slopes is None else slopes.get("south")
+    north = None if slopes is None else slopes.get("north")
 
-    def _sum_references(a: dict, scale_a: float, b: dict, scale_b: float) -> dict:
+    def reference(i: int, j: int):
+        """In-grid terms (a dict) and a fixed constant of one grid reference."""
+        if 0 <= i <= nx and 0 <= j <= ny:
+            return {(i, j): 1.0}, ()
+        if i < 0 and west is not None and 0 <= j <= ny:
+            return {(1, j): 1.0}, tuple(-2.0 * du * c for c in west[j])
+        if i > nx and east is not None and 0 <= j <= ny:
+            return {(nx - 1, j): 1.0}, tuple(2.0 * du * c for c in east[j])
+        if j < 0 and south is not None and 0 <= i <= nx:
+            return {(i, 1): 1.0}, tuple(-2.0 * dv * c for c in south[i])
+        if j > ny and north is not None and 0 <= i <= nx:
+            return {(i, ny - 1): 1.0}, tuple(2.0 * dv * c for c in north[i])
+        # no slope data for this side: the simply-supported reflection
+        if i < 0:
+            return _sum_terms(reference(0, j)[0], 2.0, reference(1, j)[0], -1.0), ()
+        if i > nx:
+            return (
+                _sum_terms(reference(nx, j)[0], 2.0, reference(nx - 1, j)[0], -1.0),
+                (),
+            )
+        if j < 0:
+            return _sum_terms(reference(i, 0)[0], 2.0, reference(i, 1)[0], -1.0), ()
+        return (
+            _sum_terms(reference(i, ny)[0], 2.0, reference(i, ny - 1)[0], -1.0),
+            (),
+        )
+
+    def _sum_terms(a: dict, scale_a: float, b: dict, scale_b: float) -> dict:
         out: dict = {}
         for point, value in a.items():
             out[point] = out.get(point, 0.0) + scale_a * value
@@ -352,8 +397,9 @@ def plate_fill(values: list, nx: int, ny: int, ridge: float = 1e-9) -> list:
     for (i, j) in unknown:
         k = index[(i, j)]
         for (di, dj, coefficient) in _PLATE_STENCIL:
-            for (ii, jj), expansion in reference(i + di, j + dj).items():
-                value = coefficient * expansion
+            terms, constant = reference(i + di, j + dj)
+            for (ii, jj), weight in terms.items():
+                value = coefficient * weight
                 slot = index.get((ii, jj))
                 if slot is None:
                     fixed = values[ii * stride + jj]
@@ -361,6 +407,9 @@ def plate_fill(values: list, nx: int, ny: int, ridge: float = 1e-9) -> list:
                         rhs[k][comp] -= value * fixed[comp]
                 else:
                     rows[k][slot] = rows[k].get(slot, 0.0) + value
+            if constant:
+                for comp in range(3):
+                    rhs[k][comp] -= coefficient * constant[comp]
 
     bandwidth = max(
         (j - i for i, row in enumerate(rows) for j in row if j > i), default=0
@@ -368,7 +417,6 @@ def plate_fill(values: list, nx: int, ny: int, ridge: float = 1e-9) -> list:
     factor = banded_cholesky(rows, n, bandwidth)
     solution = [banded_solve(factor, [rhs[k][c] for k in range(n)], n, bandwidth)
                 for c in range(3)]
-    del ridge
 
     out = list(values)
     for k, (i, j) in enumerate(unknown):

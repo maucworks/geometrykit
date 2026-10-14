@@ -19,7 +19,8 @@ from __future__ import annotations
 import pytest
 from geometrykit.geometry.curve import Curve
 from geometrykit.geometry.primitives import Vec
-from geometrykit.runtimes._npu import linalg_np, patch_np
+from geometrykit.geometry.surface import Surface
+from geometrykit.runtimes._npu import linalg_np, patch_g1, patch_np
 
 STEP = 1e-3
 
@@ -132,6 +133,96 @@ class TestPlateSolve:
         assert roughness(filled) < roughness(values) / 10.0
 
 
+class TestClampedPlateSolve:
+    """The M3 closure: a side's cross-derivative as a condition of the solve.
+
+    The ghost is eliminated by the slope relation, which is exact for affine
+    slope data -- so ``x*y`` and ``x**2`` come back exactly under it, and so
+    does a mixed grid where only some sides carry slope data. These are the
+    checks that decide whether the boundary condition is *the* condition, not
+    an approximation of it.
+    """
+
+    @staticmethod
+    def _flat(f, nx, ny):
+        return [(f(i, j), 0.0, 0.0) for i in range(nx + 1) for j in range(ny + 1)]
+
+    @staticmethod
+    def _slopes(dfx, dfy, nx, ny, step=1.0):
+        """Per-station cross-derivatives in the increasing-index direction.
+
+        The lambdas are in *real* coordinates, so the stations are scaled by
+        the step before sampling.
+        """
+        return {
+            "west": [(dfx(0.0, j * step), 0.0, 0.0) for j in range(ny + 1)],
+            "east": [(dfx(nx * step, j * step), 0.0, 0.0) for j in range(ny + 1)],
+            "south": [(dfy(i * step, 0.0), 0.0, 0.0) for i in range(nx + 1)],
+            "north": [(dfy(i * step, ny * step), 0.0, 0.0) for i in range(nx + 1)],
+        }
+
+    @staticmethod
+    def _assert_exact(name, f, dfx, dfy, nx=7, ny=7, step=1.0):
+        values = [
+            (f(i * step, j * step), 0.0, 0.0)
+            for i in range(nx + 1)
+            for j in range(ny + 1)
+        ]
+        slopes = TestClampedPlateSolve._slopes(dfx, dfy, nx, ny, step)
+        filled = linalg_np.plate_fill(values, nx, ny, slopes=slopes, steps=(step, step))
+        worst = max(
+            abs(filled[i * (ny + 1) + j][0] - f(i * step, j * step))
+            for i in range(nx + 1)
+            for j in range(ny + 1)
+        )
+        assert worst < 1e-9, (name, worst)
+
+    def test_reproduces_a_bilinear_datum_clamped(self):
+        self._assert_exact(
+            "x*y", lambda x, y: x * y,
+            lambda x, y: y, lambda x, y: x,
+        )
+
+    def test_reproduces_a_quadratic_datum_clamped(self):
+        self._assert_exact(
+            "x^2", lambda x, y: x * x,
+            lambda x, y: 2.0 * x, lambda x, y: 0.0,
+        )
+
+    def test_reproduces_a_sum_clamped(self):
+        self._assert_exact(
+            "x*y + 2 x^2", lambda x, y: x * y + 2.0 * x * x,
+            lambda x, y: y + 4.0 * x, lambda x, y: x,
+        )
+
+    def test_exact_with_a_non_unit_step(self):
+        step = 0.3804
+        self._assert_exact(
+            "x*y + 2 x^2 (step)", lambda x, y: x * y + 2.0 * x * x,
+            lambda x, y: y + 4.0 * x, lambda x, y: x, step=step,
+        )
+
+    def test_mixed_closures(self):
+        """Sides without slope data fall back to simply supported, and the
+        clamped sides stay exact."""
+        nx = ny = 7
+        slopes = {
+            "west": [(j, 0.0, 0.0) for j in range(ny + 1)],
+            "east": [(j, 0.0, 0.0) for j in range(ny + 1)],
+        }
+        values = [
+            (x * y + 0.0 * 0, x * 0.0, 0.0) if False else (x * y, 0.0, 0.0)
+            for x in range(nx + 1) for y in range(ny + 1)
+        ]
+        filled = linalg_np.plate_fill(values, nx, ny, slopes=slopes)
+        worst = max(
+            abs(filled[i * (ny + 1) + j][0] - i * j)
+            for i in range(nx + 1)
+            for j in range(ny + 1)
+        )
+        assert worst < 1e-9, worst
+
+
 class TestPlateFillPatch:
     """The fill at patch level: boundary exact, interior smoother than Coons."""
 
@@ -199,3 +290,114 @@ class TestPlateFillPatch:
             for j in range(9)
         )
         assert worst < 1e-12, worst
+
+
+def _occ_available() -> bool:
+    try:
+        import OCC.Core.BRep  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _slope_ratio(surface, edge: str, t: float) -> float:
+    """The boundary cross-tangent's magnitude per unit cross extent."""
+    if edge == "south":
+        cross = surface.tangents_at(t, 0.0)[1]
+    elif edge == "north":
+        cross = surface.tangents_at(t, 1.0)[1]
+    elif edge == "west":
+        cross = surface.tangents_at(0.0, t)[0]
+    else:
+        cross = surface.tangents_at(1.0, t)[0]
+    extent = max(patch_g1._cross_extent(surface, edge, t), 1e-9)
+    return abs(cross) / extent
+
+
+@pytest.mark.skipif(not _occ_available(), reason="needs pythonocc for ribbons")
+class TestClampedFillCarriesTheSupportsSlope:
+    """M3 on the flowing-roof network: G1 as a boundary condition of the fill.
+
+    The gate this file exists to keep: the *fill itself* must arrive at the
+    support's leaving rate, not a Coons-shape base that the row passes then
+    bend into compliance. Pre-rows the rate should be near the support's own
+    (2.000 per unit cross extent at tangency 1.0); post-rows it must be exact
+    and the interior must stay smooth.
+    """
+
+    @staticmethod
+    def _setup(nu: int = 12):
+        supports = [
+            Surface.ribbon(_network()[0], angle_deg=0, width=1.0, symmetric=True),
+            Surface.ribbon(_network()[1], angle_deg=0, width=1.0, symmetric=True),
+            Surface.ribbon(
+                _network()[2], angles_deg=[180, 155, 180], width=1.0, symmetric=True
+            ),
+            Surface.ribbon(_network()[3], angle_deg=0, width=1.0, symmetric=True),
+        ]
+        network = _network()
+        params_u, params_v, oriented = patch_np.coons_parametrization(
+            network, nu=nu, nv=nu, parametrization="arclength"
+        )
+        fields = {
+            edge: patch_g1.support_constraint(support, spine, towards=Vec(4, 3, 2.9))
+            for edge, spine, support in zip(patch_g1.EDGE_NAMES, network, supports)
+        }
+        return network, params_u, params_v, oriented, fields
+
+    def test_the_fill_carries_the_slope_before_any_correction(self):
+        network, params_u, params_v, oriented, fields = self._setup()
+        coons, _c = patch_np.discrete_coons_patch(
+            network, nu=12, nv=12, parametrization="arclength"
+        )
+        slopes = patch_g1.grid_edge_slopes(
+            coons, oriented, params_u, params_v, fields, 1.0
+        )
+        assert set(slopes) == {"south", "east", "north", "west"}
+        fill, _corners = patch_np.discrete_plate_fill(
+            network, nu=12, nv=12, parametrization="arclength", slopes=slopes
+        )
+        # boundary values untouched
+        for edge, spine in zip(patch_g1.EDGE_NAMES, network):
+            params = params_u if edge in ("south", "north") else params_v
+            curve_params = patch_np.edge_curve_params(oriented, edge, params)
+            for k, t in enumerate(params):
+                if edge == "south":
+                    got = fill.point_at(t, 0.0)
+                elif edge == "north":
+                    got = fill.point_at(t, 1.0)
+                elif edge == "west":
+                    got = fill.point_at(0.0, t)
+                else:
+                    got = fill.point_at(1.0, t)
+                assert abs(got - spine.point_at(curve_params[k])) < 1e-12, (edge, k)
+        # and the leaving rate comes from the solve, not from the rows
+        for edge in patch_g1.EDGE_NAMES:
+            params = params_u if edge in ("south", "north") else params_v
+            ratios = [_slope_ratio(fill, edge, t) for t in params[1:-1]]
+            assert sum(ratios) / len(ratios) > 1.7, (edge, ratios)
+            assert min(ratios) > 1.5, (edge, ratios)
+
+    def test_rows_confirm_and_the_interior_stays_smooth(self):
+        network, _params_u, _params_v, _oriented, fields = self._setup()
+        surface, _c, stations = patch_g1.constrained_coons_patch(
+            network, fields, nu=12, nv=12, tangency=1.0, g2=True, fill=True,
+            parametrization="arclength",
+        )
+        # the rows finish the job: leaving rate exactly the support's own
+        # (over the stations they are allowed to touch -- the corner band is
+        # deliberately free, see corner_stations)
+        for edge in patch_g1.EDGE_NAMES:
+            params = stations[0] if edge in ("south", "north") else stations[1]
+            for t in params[2:-2]:
+                # 2e-2: the ridge least-squares' own trade at nu=12, widest
+                # corner-adjacent where the two edge constraints pull (the
+                # known corner-band looseness, M5's territory; measured
+                # 3.6e-3 central, 8.7e-3 corner-adjacent, exact at nu=16)
+                assert abs(_slope_ratio(surface, edge, t) - 2.0) < 2e-2, (edge, t)
+        # interior regression anchors (M3 gate): cross-direction peak far
+        # below what the unclamped plate could hold, interior means smooth
+        profile = _curvature_profile(surface, 12)
+        assert profile[3] < 0.25, profile  # |k_v| max
+        assert profile[1] < 0.20, profile  # |k_u| max
+        assert profile[2] < 0.06, profile  # |k_v| mean

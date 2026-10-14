@@ -72,6 +72,7 @@ from geometrykit.runtimes._npu.patch_np import (
     coons_parametrization,
     discrete_coons_patch,
     discrete_plate_fill,
+    edge_curve_params,
 )
 
 EDGE_NAMES = ("south", "east", "north", "west")
@@ -930,6 +931,61 @@ def _refine_g2(
     )
 
 
+def grid_edge_slopes(
+    surface,
+    oriented: Sequence,
+    params_u: Sequence[float],
+    params_v: Sequence[float],
+    edge_normal_fields: dict,
+    tangency: float,
+) -> dict:
+    """The supports' slopes as cross-derivative data on the fill's grid.
+
+    For every edge whose field spec carries a support, spine and slope, this
+    returns the cross-derivative the patch should leave that edge with --
+    *the same targets the G1 rows impose*, scaled by the tangency strength --
+    evaluated per station in the orientation the plate solve wants: the
+    derivative with respect to the increasing grid index, so west/south pass
+    the target as-wanted and east/north negate it (interior is *below*/inward
+    there).
+
+    Sides whose field has no slope data are absent from the dict; the fill
+    leaves them simply supported. This is the clamp closure of
+    `linalg_np.plate_fill` fed from patch space.
+    """
+    data: dict = {}
+    for edge, field in edge_normal_fields.items():
+        if field is None or tangency is None:
+            continue
+        support = field.get("support") if isinstance(field, dict) else None
+        spine = field.get("spine") if isinstance(field, dict) else None
+        if support is None or spine is None:
+            continue
+        if edge in ("south", "north"):
+            stations = edge_curve_params(oriented, edge, params_u)
+        else:
+            stations = edge_curve_params(oriented, edge, params_v)
+        vectors = []
+        for t in stations:
+            slope = _slope_of(field, t)
+            if slope is None:
+                break
+            length = (slope[0] ** 2 + slope[1] ** 2 + slope[2] ** 2) ** 0.5
+            if length < _EPS:
+                raise G1Error("the support slope is degenerate at a station")
+            unit = [comp / length for comp in slope]
+            reach = _cross_extent(surface, edge, t)
+            support_reach = _support_reach(support, spine, t)
+            magnitude = tangency * (length / support_reach) * reach
+            vector = [magnitude * unit[comp] for comp in range(3)]
+            if edge in ("east", "north"):
+                vector = [-v for v in vector]
+            vectors.append(tuple(vector))
+        else:
+            data[edge] = vectors
+    return data
+
+
 def constrained_coons_patch(
     curves: Sequence,
     edge_normal_fields: dict,
@@ -966,7 +1022,10 @@ def constrained_coons_patch(
                             fill instead of the Coons blend. The boundary rows
                             are identical; the interior is the thin-plate
                             solution through that boundary, so the continuity
-                            solve starts from a smooth surface.
+                            solve starts from a smooth surface. With a
+                            ``tangency`` strength the supports' slopes also
+                            enter the solve as its clamped boundary
+                            condition.
         parametrization:    how the patch stations are spread -- ``"chord"``
                             (the curve's own parameterisation) or
                             ``"arclength"`` (even in space, uniform knots).
@@ -987,7 +1046,7 @@ def constrained_coons_patch(
     surface, corners = discrete_coons_patch(
         curves, nu=nu, nv=nv, tol=tol, degree=degree, parametrization=parametrization
     )
-    params_u, params_v, _oriented = coons_parametrization(
+    params_u, params_v, oriented = coons_parametrization(
         curves, nu=nu, nv=nv, tol=tol, parametrization=parametrization
     )
     if fill:
@@ -996,6 +1055,17 @@ def constrained_coons_patch(
         # but the interior is the thin-plate solution, so the continuity solve
         # below starts from a surface that already wants to be smooth instead
         # of from a flat blend with the bending at the edges.
+        #
+        # With a tangency strength, the supports' slopes ride along as the
+        # clamped boundary condition of that solve (G1 as a condition of the
+        # PDE, not a correction on a finished surface) -- the coons blend is
+        # built first only because the tangency scaling needs a surface's
+        # cross extent. The row passes below then confirm rather than correct.
+        slopes = None
+        if tangency is not None:
+            slopes = grid_edge_slopes(
+                surface, oriented, params_u, params_v, edge_normal_fields, tangency
+            )
         surface, corners = discrete_plate_fill(
             curves,
             nu=nu,
@@ -1003,6 +1073,7 @@ def constrained_coons_patch(
             tol=tol,
             degree=degree,
             parametrization=parametrization,
+            slopes=slopes,
         )
 
     fixed = solve_g1_constraints(
