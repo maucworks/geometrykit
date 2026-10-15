@@ -1255,6 +1255,7 @@ def constrained_coons_patch(
     fill: bool = False,
     g2_in_fill: bool = False,
     loose: int = 0,
+    adaptive: float = 0.0,
     parametrization: str = "chord",
 ):
     """P-1 entry point: G1-constrained discrete Coons patch.
@@ -1300,6 +1301,14 @@ def constrained_coons_patch(
         corner_stations:    stations dropped at each end of an edge (the
                             corner band, where the boundary curves pin
                             the cross-derivative).
+        adaptive:           tolerance for the adaptive re-fit (0 = off).
+                            Re-fits the constrained surface onto a
+                            C1-segmented degree-4 net with the stations
+                            held exact -- rows-then-fit, the measured
+                            order (re-running rows on the fitted net
+                            concentrates bend at the boundary band).
+                            Needs numpy; off by default so the plain
+                            path stays dependency-free.
         loose:              stations of enlargement per side for the loose
                             fill (this library's version of OCC's through-
                             the-edge plate): the plate is solved over a
@@ -1374,4 +1383,15 @@ def constrained_coons_patch(
         tangency=tangency,
         g2_edges=list(EDGE_NAMES) if g2 else None,
     )
+    if adaptive > 0.0:
+        # rows-then-fit: the constrained dense field is approximated onto
+        # a C1-segmented net with the stations held exact, so the boundary
+        # contract and the station map survive; the row passes are NOT
+        # re-run on the fitted net (they concentrate bend at the boundary
+        # band there -- measured 17x).
+        from geometrykit.runtimes._npu import fit_np
+
+        fixed, _report = fit_np.adaptive_fit(
+            fixed, degree=4, tol=adaptive, stations=(params_u, params_v)
+        )
     return fixed, corners, (params_u, params_v)

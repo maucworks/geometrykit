@@ -187,3 +187,65 @@ class TestStationExactFit:
             ("k_u mean", "k_u max", "k_v mean", "k_v max"), before, after
         ):
             assert b < 3.0 * a, (name, a, b)
+
+
+def _analytic_fields():
+    return {
+        edge: {
+            "normal": lambda t: (0.0, 0.0, 1.0),
+            "slope": lambda t: (1.0, 0.0, 0.0),
+        }
+        for edge in ("south", "east", "north", "west")
+    }
+
+
+class TestAdaptiveOffByDefault:
+    """adaptive=0 (the default) changes nothing: no numpy needed."""
+
+    def test_flag_off_matches_no_flag(self):
+        from geometrykit.runtimes._npu import patch_g1
+
+        curves = _network()
+        fields = _analytic_fields()
+        kwargs = dict(nu=8, nv=8, fill=True, parametrization="arclength")
+        plain, _c, _s = patch_g1.constrained_coons_patch(curves, fields, **kwargs)
+        flagged, _c, _s = patch_g1.constrained_coons_patch(
+            curves, fields, adaptive=0.0, **kwargs
+        )
+        assert flagged.nu == plain.nu and flagged.nv == plain.nv
+        for row_p, row_f in zip(plain.control_points, flagged.control_points):
+            for p, q in zip(row_p, row_f):
+                assert abs(p - q) == 0.0
+
+
+@needs_numpy
+class TestAdaptiveOption:
+    """The entry flag fits behind the rows: boundary exact, C1 segments."""
+
+    def test_entry_flag_holds_the_boundary(self):
+        from geometrykit.runtimes._npu import patch_g1
+
+        curves = _network()
+        fields = _analytic_fields()
+        params_u, params_v, oriented = patch_np.coons_parametrization(
+            curves, nu=12, nv=12, parametrization="arclength"
+        )
+        surface, _c, _s = patch_g1.constrained_coons_patch(
+            curves, fields, nu=12, nv=12, fill=True, adaptive=1e-3,
+            parametrization="arclength",
+        )
+        assert max(surface.umults[1:-1], default=0) <= surface.udegree - 1
+        assert max(surface.vmults[1:-1], default=0) <= surface.vdegree - 1
+        for edge, spine in zip(("south", "east", "north", "west"), curves):
+            params = params_u if edge in ("south", "north") else params_v
+            curve_params = patch_np.edge_curve_params(oriented, edge, params)
+            for k, t in enumerate(params):
+                if edge == "south":
+                    got = surface.point_at(t, 0.0)
+                elif edge == "north":
+                    got = surface.point_at(t, 1.0)
+                elif edge == "west":
+                    got = surface.point_at(0.0, t)
+                else:
+                    got = surface.point_at(1.0, t)
+                assert abs(got - spine.point_at(curve_params[k])) < 1e-9, (edge, k)

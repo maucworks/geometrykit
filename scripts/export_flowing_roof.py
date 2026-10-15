@@ -211,28 +211,15 @@ def main() -> None:
         }
         surface, _corners, stations = patch_g1.constrained_coons_patch(
             spines, fields, nu=16, nv=16, tangency=TANGENCY, g2=G2, fill=FILL,
-            loose=LOOSE, corner_stations=0, parametrization=PARAMETRIZATION
+            loose=LOOSE, corner_stations=0,
+            adaptive=(ADAPTIVE_TOL if ADAPTIVE else 0.0),
+            parametrization=PARAMETRIZATION
         )
         if ADAPTIVE:
-            # rows-then-fit: the constrained dense field is approximated
-            # onto a C1-segmented net with the stations held exact, so the
-            # boundary contract and the station map survive; the row passes
-            # are NOT re-run on the fitted net (they concentrate bend at
-            # the boundary band there -- measured 17x).
-            from geometrykit.runtimes._npu import fit_np
-
-            surface, report = fit_np.adaptive_fit(
-                surface, degree=4, tol=ADAPTIVE_TOL,
-                stations=(params_u, params_v),
-            )
-            adaptive_suffix = (
-                f", adaptive C1d4 {report['segments'][0]}x{report['segments'][1]}"
-            )
+            segs = (len(surface.uknots) - 1, len(surface.vknots) - 1)
+            adaptive_suffix = f", adaptive C1d4 {segs[0]}x{segs[1]}"
             print(
-                f"{name} patch re-fitted: segments {report['segments']} "
-                f"poles {surface.nu}x{surface.nv} "
-                f"sample {report['sample_worst']:.2e} "
-                f"boundary {report['boundary_worst']:.2e}"
+                f"{name} patch re-fitted: poles {surface.nu}x{surface.nv}"
             )
         else:
             adaptive_suffix = ""
