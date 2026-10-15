@@ -208,8 +208,8 @@ class TestAdaptiveOffByDefault:
         curves = _network()
         fields = _analytic_fields()
         kwargs = dict(nu=8, nv=8, fill=True, parametrization="arclength")
-        plain, _c, _s = patch_g1.constrained_coons_patch(curves, fields, **kwargs)
-        flagged, _c, _s = patch_g1.constrained_coons_patch(
+        plain, _c, _s = patch_g1.constrained_patch(curves, fields, **kwargs)
+        flagged, _c, _s = patch_g1.constrained_patch(
             curves, fields, adaptive=0.0, **kwargs
         )
         assert flagged.nu == plain.nu and flagged.nv == plain.nv
@@ -230,7 +230,7 @@ class TestAdaptiveOption:
         params_u, params_v, oriented = patch_np.coons_parametrization(
             curves, nu=12, nv=12, parametrization="arclength"
         )
-        surface, _c, _s = patch_g1.constrained_coons_patch(
+        surface, _c, _s = patch_g1.constrained_patch(
             curves, fields, nu=12, nv=12, fill=True, adaptive=1e-3,
             parametrization="arclength",
         )

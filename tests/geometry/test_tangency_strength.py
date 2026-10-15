@@ -109,7 +109,7 @@ class TestTangencyStrength:
 
     def test_strength_one_matches_the_support_own_slope(self):
         network, supports, fields = self._setup()
-        surface, _c, stations = patch_g1.constrained_coons_patch(
+        surface, _c, stations = patch_g1.constrained_patch(
             network, fields, nu=12, nv=12, tangency=1.0
         )
         patch_slope, _worst = self._boundary_slopes(surface, fields, stations)
@@ -135,7 +135,7 @@ class TestTangencyStrength:
         network, _supports, fields = self._setup()
         measured = {}
         for tangency in (0.5, 1.0, 2.0):
-            surface, _c, stations = patch_g1.constrained_coons_patch(
+            surface, _c, stations = patch_g1.constrained_patch(
                 network, fields, nu=12, nv=12, tangency=tangency
             )
             measured[tangency], _worst = self._boundary_slopes(surface, fields, stations)
@@ -145,10 +145,10 @@ class TestTangencyStrength:
     def test_the_default_is_softer_than_the_support(self):
         """Which is the whole point of the knob: min-norm under-delivers."""
         network, _supports, fields = self._setup()
-        default, _c, stations = patch_g1.constrained_coons_patch(
+        default, _c, stations = patch_g1.constrained_patch(
             network, fields, nu=12, nv=12
         )
-        stiff, _c, stations = patch_g1.constrained_coons_patch(
+        stiff, _c, stations = patch_g1.constrained_patch(
             network, fields, nu=12, nv=12, tangency=1.0
         )
         softer, _worst = self._boundary_slopes(default, fields, stations)
@@ -158,7 +158,7 @@ class TestTangencyStrength:
     def test_g1_holds_at_every_strength(self):
         network, _supports, fields = self._setup()
         for tangency in (0.25, 1.0, 4.0):
-            surface, _c, stations = patch_g1.constrained_coons_patch(
+            surface, _c, stations = patch_g1.constrained_patch(
                 network, fields, nu=12, nv=12, tangency=tangency
             )
             _slope, worst = self._boundary_slopes(surface, fields, stations)
@@ -168,6 +168,6 @@ class TestTangencyStrength:
         network, _supports, fields = self._setup()
         bare = {edge: fields[edge]["normal"] for edge in patch_g1.EDGE_NAMES}
         with pytest.raises(patch_g1.G1Error, match="slope"):
-            patch_g1.constrained_coons_patch(
+            patch_g1.constrained_patch(
                 network, bare, nu=12, nv=12, tangency=1.0
             )

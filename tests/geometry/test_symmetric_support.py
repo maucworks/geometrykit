@@ -200,7 +200,7 @@ class TestSymmetricRibbon:
                     min(cp, key=lambda c: abs(c - t))
                 )
             )
-        surface, _corners, stations = patch_g1.constrained_coons_patch(
+        surface, _corners, stations = patch_g1.constrained_patch(
             network, fields, nu=12, nv=12
         )
         for edge in patch_g1.EDGE_NAMES:

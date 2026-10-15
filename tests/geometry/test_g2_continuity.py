@@ -190,11 +190,11 @@ class TestG2AcrossTheEdges:
 
     def test_g2_closes_the_curvature_gap(self):
         network, _supports, fields, curve_params = self._setup()
-        g1_only, _c, stations = patch_g1.constrained_coons_patch(
+        g1_only, _c, stations = patch_g1.constrained_patch(
             network, fields, nu=12, nv=12, tangency=1.0
         )
         gap_before, _g1 = self._curvature_gap(g1_only, fields, stations, curve_params)
-        with_g2, _c, stations = patch_g1.constrained_coons_patch(
+        with_g2, _c, stations = patch_g1.constrained_patch(
             network, fields, nu=12, nv=12, tangency=1.0, g2=True
         )
         gap_after, worst_g1 = self._curvature_gap(with_g2, fields, stations, curve_params)
@@ -206,7 +206,7 @@ class TestG2AcrossTheEdges:
     def test_g2_keeps_the_tangent_plane(self):
         network, _supports, fields, curve_params = self._setup()
         for tangency in (None, 1.0):
-            surface, _c, stations = patch_g1.constrained_coons_patch(
+            surface, _c, stations = patch_g1.constrained_patch(
                 network, fields, nu=12, nv=12, tangency=tangency, g2=True
             )
             _gap, worst_g1 = self._curvature_gap(surface, fields, stations, curve_params)
@@ -216,13 +216,13 @@ class TestG2AcrossTheEdges:
         network, _supports, fields, _curve_params = self._setup()
         bare = {edge: fields[edge]["normal"] for edge in patch_g1.EDGE_NAMES}
         with pytest.raises(patch_g1.G1Error, match="G2 constraint"):
-            patch_g1.constrained_coons_patch(network, bare, nu=12, nv=12, g2=True)
+            patch_g1.constrained_patch(network, bare, nu=12, nv=12, g2=True)
 
     def test_g2_does_not_fight_the_tangency_strength(self):
         """Both knobs on at once: curvature matched at any strength."""
         network, _supports, fields, curve_params = self._setup()
         for tangency in (0.5, 2.0):
-            surface, _c, stations = patch_g1.constrained_coons_patch(
+            surface, _c, stations = patch_g1.constrained_patch(
                 network, fields, nu=12, nv=12, tangency=tangency, g2=True
             )
             gap, worst_g1 = self._curvature_gap(surface, fields, stations, curve_params)

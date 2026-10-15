@@ -211,7 +211,7 @@ class TestRoofCorners:
         curves, params_u, params_v, oriented, fields = self._roof(nu=16)
         # driver opts in explicitly: verified at this density (NU=16),
         # fragile below it (see the corner_stations contract)
-        surface, _c, _s = patch_g1.constrained_coons_patch(
+        surface, _c, _s = patch_g1.constrained_patch(
             curves, fields, nu=16, nv=16, tangency=0.75, g2=True, fill=True,
             corner_stations=0, parametrization="arclength",
         )

@@ -1241,7 +1241,7 @@ def grid_edge_curvatures(
     return data
 
 
-def constrained_coons_patch(
+def constrained_patch(
     curves: Sequence,
     edge_normal_fields: dict,
     nu: int = 12,
@@ -1258,7 +1258,7 @@ def constrained_coons_patch(
     adaptive: float = 0.0,
     parametrization: str = "chord",
 ):
-    """P-1 entry point: G1-constrained discrete Coons patch.
+    """P-1 entry point: continuity-constrained patch.
 
     Args:
         curves:             ``[south, east, north, west]`` (drawn directions
@@ -1395,3 +1395,8 @@ def constrained_coons_patch(
             fixed, degree=4, tol=adaptive, stations=(params_u, params_v)
         )
     return fixed, corners, (params_u, params_v)
+
+
+# Compat alias: the entry's historical name from before the plate fill
+# replaced the Coons blend as the interior (M2). New code says constrained_patch.
+constrained_coons_patch = constrained_patch

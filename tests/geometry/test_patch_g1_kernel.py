@@ -86,8 +86,8 @@ class TestCoplanarG1:
     def test_coplanar_g1_leaves_the_patch_untouched(self):
         curves = _rectangle()
         fields = {edge: (lambda t: UP) for edge in patch_g1.EDGE_NAMES}
-        base, _corners, stations = patch_g1.constrained_coons_patch(curves, {}, nu=12, nv=12)
-        fixed, _corners, _stations = patch_g1.constrained_coons_patch(
+        base, _corners, stations = patch_g1.constrained_patch(curves, {}, nu=12, nv=12)
+        fixed, _corners, _stations = patch_g1.constrained_patch(
             curves, fields, nu=12, nv=12
         )
         moved = max(
@@ -108,8 +108,8 @@ class TestCoplanarG1:
         field = (0.0, -tilt, math.sqrt(1.0 - tilt * tilt))
         fields = {edge: (lambda t: UP) for edge in patch_g1.EDGE_NAMES}
         fields["south"] = lambda t: field
-        base, _c, _s = patch_g1.constrained_coons_patch(curves, {}, nu=12, nv=12)
-        fixed, _c, stations = patch_g1.constrained_coons_patch(curves, fields, nu=12, nv=12)
+        base, _c, _s = patch_g1.constrained_patch(curves, {}, nu=12, nv=12)
+        fixed, _c, stations = patch_g1.constrained_patch(curves, fields, nu=12, nv=12)
         residual = _g1_residual(fixed, "south", stations[0], lambda t: field)
         assert residual < 1e-6, residual
         # the tilt pulls the surface toward the south field, so the patch
@@ -123,15 +123,15 @@ class TestCoplanarG1:
         tilt = 0.2
         field = (0.0, -tilt, math.sqrt(1.0 - tilt * tilt))
         base_fields = {edge: (lambda t: UP) for edge in patch_g1.EDGE_NAMES}
-        by_call, _c, stations = patch_g1.constrained_coons_patch(
+        by_call, _c, stations = patch_g1.constrained_patch(
             curves, dict(base_fields, south=lambda t: field), nu=12, nv=12
         )
         pairs = list(zip(stations[0][1:-1], [field] * (len(stations[0]) - 2)))
-        by_pairs, _c, _s = patch_g1.constrained_coons_patch(
+        by_pairs, _c, _s = patch_g1.constrained_patch(
             curves, dict(base_fields, south=pairs), nu=12, nv=12
         )
         plain = [field] * (len(stations[0]) - 2)
-        by_plain, _c, _s = patch_g1.constrained_coons_patch(
+        by_plain, _c, _s = patch_g1.constrained_patch(
             curves, dict(base_fields, south=plain), nu=12, nv=12
         )
         for a, b, c in zip(by_call.control_points, by_pairs.control_points, by_plain.control_points):
@@ -142,11 +142,11 @@ class TestCoplanarG1:
     def test_unknown_field_raises(self):
         curves = _rectangle()
         with pytest.raises(patch_g1.G1Error):
-            patch_g1.constrained_coons_patch(
+            patch_g1.constrained_patch(
                 curves, {"south": [(0.0, 0.0, 1.0)]}, nu=12, nv=12
             )
         with pytest.raises(patch_g1.G1Error):
-            patch_g1.constrained_coons_patch(
+            patch_g1.constrained_patch(
                 curves, {"south": (0.0, 0.0, 0.0)}, nu=12, nv=12
             )
 
@@ -220,7 +220,7 @@ class TestFlowingRoofG1:
             "north": ribbon_normal("north", 2),
             "west": ribbon_normal("west", 3),
         }
-        surface, _corners, stations = patch_g1.constrained_coons_patch(
+        surface, _corners, stations = patch_g1.constrained_patch(
             curves, fields, nu=12, nv=12
         )
         for edge in patch_g1.EDGE_NAMES:
@@ -281,7 +281,7 @@ class TestFlowingRoofG1:
             "north": ribbon_normal("north", 2),
             "west": ribbon_normal("west", 3),
         }
-        surface, _corners, _stations = patch_g1.constrained_coons_patch(
+        surface, _corners, _stations = patch_g1.constrained_patch(
             curves, fields, nu=12, nv=12
         )
 

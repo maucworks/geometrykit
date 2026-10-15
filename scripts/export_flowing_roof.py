@@ -209,7 +209,7 @@ def main() -> None:
             edge: spine_field(edge, spine, support, oriented, params_u, params_v, towards)
             for edge, spine, support in zip(patch_g1.EDGE_NAMES, spines, supports)
         }
-        surface, _corners, stations = patch_g1.constrained_coons_patch(
+        surface, _corners, stations = patch_g1.constrained_patch(
             spines, fields, nu=16, nv=16, tangency=TANGENCY, g2=G2, fill=FILL,
             loose=LOOSE, corner_stations=0,
             adaptive=(ADAPTIVE_TOL if ADAPTIVE else 0.0),

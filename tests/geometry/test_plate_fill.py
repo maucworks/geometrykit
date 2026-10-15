@@ -372,7 +372,7 @@ class TestPlateFillPatch:
         assert plate_profile[2] < 0.6 * coons_profile[2], (mode, coons_profile, plate_profile)
 
     def test_the_fill_routes_through_the_patch_entry_point(self):
-        """`constrained_coons_patch(fill=True)` bases the patch on the plate.
+        """`constrained_patch(fill=True)` bases the patch on the plate.
 
         With no continuity fields the constraint solve has nothing to impose,
         so the result is the base itself -- which is what makes this a clean
@@ -381,7 +381,7 @@ class TestPlateFillPatch:
         from geometrykit.runtimes._npu import patch_g1
 
         curves = _network()
-        filled, _c, _s = patch_g1.constrained_coons_patch(
+        filled, _c, _s = patch_g1.constrained_patch(
             curves, {}, nu=8, nv=8, fill=True, parametrization="arclength"
         )
         plate, _c = patch_np.discrete_plate_fill(
@@ -491,11 +491,11 @@ class TestCurvatureBeltOptIn:
             Surface.ribbon(_network()[3], angle_deg=0, width=1.0, symmetric=True),
         ]
         curves, _pu, _pv, _o, fields = self._fields(ridged)
-        surface, _c, _st = patch_g1.constrained_coons_patch(
+        surface, _c, _st = patch_g1.constrained_patch(
             curves, fields, nu=12, nv=12, tangency=1.0, g2=True, fill=True,
             parametrization="arclength",
         )
-        reference, _c, _st = patch_g1.constrained_coons_patch(
+        reference, _c, _st = patch_g1.constrained_patch(
             curves, fields, nu=12, nv=12, tangency=1.0, g2=True, fill=True,
             g2_in_fill=True, parametrization="arclength",
         )
@@ -578,7 +578,7 @@ class TestClampedFillCarriesTheSupportsSlope:
 
     def test_rows_confirm_and_the_interior_stays_smooth(self):
         network, _params_u, _params_v, _oriented, fields = self._setup()
-        surface, _c, stations = patch_g1.constrained_coons_patch(
+        surface, _c, stations = patch_g1.constrained_patch(
             network, fields, nu=12, nv=12, tangency=1.0, g2=True, fill=True,
             parametrization="arclength",
         )
