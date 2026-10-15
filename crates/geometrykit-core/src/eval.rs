@@ -19,21 +19,25 @@ pub struct EvalAll {
     pub sv: Pt,
 }
 
-/// Prepared surface payload: expanded knots + pole grid + weights.
-///
-/// Mirrors the mirror's `_Data`: knot expansion happens once at
-/// construction; payloads are treated as values afterwards. Pole grid
-/// is row-major (`poles[i * nv + j]`); `weights` is `Some` with exactly
-/// `nu * nv` row-major entries for rational surfaces.
+/// Pole grid is row-major (`poles[i * nv + j]`); `weights` is `Some`
+/// with exactly `nu * nv` row-major entries for rational surfaces.
 pub struct Surface {
-    poles: Vec<Pt>,
-    weights: Option<Vec<f64>>,
-    nu: usize,
-    nv: usize,
-    pu: usize,
-    pv: usize,
-    uflat: Vec<f64>,
-    vflat: Vec<f64>,
+    /// Row-major pole grid.
+    pub poles: Vec<Pt>,
+    /// Row-major weights for rational surfaces, `None` otherwise.
+    pub weights: Option<Vec<f64>>,
+    /// Rows (the u-direction control count).
+    pub nu: usize,
+    /// Columns (the v-direction control count); the row stride.
+    pub nv: usize,
+    /// U-degree.
+    pub pu: usize,
+    /// V-degree.
+    pub pv: usize,
+    /// Expanded u-knot vector (mirror `_Data.uflat`).
+    pub uflat: Vec<f64>,
+    /// Expanded v-knot vector (mirror `_Data.vflat`).
+    pub vflat: Vec<f64>,
 }
 
 impl Surface {
