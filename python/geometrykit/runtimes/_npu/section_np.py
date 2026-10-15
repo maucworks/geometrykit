@@ -273,6 +273,23 @@ def weave_diagrid(surf, tracks_a: list, tracks_b: list) -> tuple:
 
     d = _data_of(surf)
 
+    # A near-grazing tangency makes the marching contour close a micro
+    # loop at the very tail (measured on the roof: exit at v=0, re-entry,
+    # exact return to the pre-exit sample). The linearized loop doubles
+    # back and whips the interpolated end span (measured 8e-03
+    # off-surface). Cut the excursion at its return point; index 0 is
+    # exempt so genuinely closed island contours keep their ring.
+    def _cut_tail_loop(track):
+        n = len(track)
+        for j in range(1, n - 2):
+            if (abs(track[-1][0] - track[j][0]) + abs(track[-1][1] - track[j][1])
+                    <= 1e-9):
+                return track[:j + 1]
+        return track
+
+    tracks_a = [_cut_tail_loop(t) for t in tracks_a]
+    tracks_b = [_cut_tail_loop(t) for t in tracks_b]
+
     def _bbox(track):
         us = [p[0] for p in track]
         vs = [p[1] for p in track]
@@ -307,42 +324,57 @@ def weave_diagrid(surf, tracks_a: list, tracks_b: list) -> tuple:
     for ia, ka, ib, kb, uv in crossings:
         extra_a.setdefault(ia, []).append((ka, uv))
         extra_b.setdefault(ib, []).append((kb, uv))
-    tracks_a = [list(t) for t in tracks_a]
-    tracks_b = [list(t) for t in tracks_b]
+    tracks_a = [[(uv, False) for uv in t] for t in tracks_a]
+    tracks_b = [[(uv, False) for uv in t] for t in tracks_b]
     for ia, items in extra_a.items():
         for ka, uv in sorted(items, reverse=True):
-            tracks_a[ia].insert(ka + 1, uv)
+            tracks_a[ia].insert(ka + 1, (uv, True))
     for ib, items in extra_b.items():
         for kb, uv in sorted(items, reverse=True):
-            tracks_b[ib].insert(kb + 1, uv)
-    # a crossing can land exactly on an existing sample: drop consecutive
-    # duplicates or even the degree-1 fallback goes singular
-    def _dedup(track):
-        out = []
-        for uv in track:
-            if not out or abs(uv[0] - out[-1][0]) + abs(uv[1] - out[-1][1]) > 1e-9:
-                out.append(uv)
-        return out
-
-    tracks_a = [_dedup(t) for t in tracks_a]
-    tracks_b = [_dedup(t) for t in tracks_b]
-
+            tracks_b[ib].insert(kb + 1, (uv, True))
+    # Thin to well-spaced 3D samples: dense global interpolation through
+    # metrically clustered points goes ill-conditioned and the poles
+    # explode -- measured 1e12 deviations from a 2.7e-07 m pair on a
+    # 109-sample chain, and residual end wiggles even from a 5e-04 m
+    # sample/node pair. Spacing is judged in meters (the chord
+    # parameterization lives there, not in uv). Everything within 1 mm of
+    # a kept point merges, and a node never loses its mark: when a node
+    # lands on a kept sample it snaps *onto that slot* (the exact node
+    # replaces the sample), so the node stays an interpolation point.
     def _eval(uv):
         q = _eval_point_data(d, uv[0], uv[1])
         return (q.x, q.y, q.z)
 
-    def _interpolate(track):
+    def _thin(track):
+        out = []  # [xyz, is_node]
+        for uv, is_node in track:
+            q = _eval(uv)  # nodes stay exact surface points
+            if _near(q, out, 1e-3):
+                if is_node and not out[-1][1]:
+                    out[-1] = [q, True]  # snap node onto the sample slot
+                continue
+            out.append([q, is_node])
+        return [q for q, _n in out]
+
+    def _near(q, out, tol):
+        return any(
+            abs(q[0] - k[0]) + abs(q[1] - k[1]) + abs(q[2] - k[2]) <= tol
+            for k, _n in out
+        )
+
+    tracks_a = [_thin(t) for t in tracks_a]
+    tracks_b = [_thin(t) for t in tracks_b]
+
+    def _interpolate(vecs):
         from geometrykit.geometry.primitives import Vec as _V
 
-        vecs = [_V(*_eval(uv)) for uv in track]
-        kwargs: dict = {}
-        if len(vecs) >= 3:
-            lead = vecs[1] - vecs[0]
-            trail = vecs[-1] - vecs[-2]
-            if abs(lead) > 1e-12 and abs(trail) > 1e-12:
-                kwargs = {"tan_start": lead, "tan_end": trail}
+        vecs = [_V(*q) for q in vecs]
+        # free ends: samples lie exactly on the surface, so the plain
+        # chord-parameterised interpolation stays on it (measured 4e-07
+        # off-surface on a 123-sample woven chain); end-tangent clamps --
+        # unit or chord-scaled -- whip the end spans (measured 6e-03).
         try:
-            return _Curve.from_points(vecs, **kwargs)
+            return _Curve.from_points(vecs)
         except RuntimeError:
             return _Curve.from_points(vecs, degree=1)
 
