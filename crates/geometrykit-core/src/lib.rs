@@ -12,6 +12,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod eval;
+
 /// Kernels crate version, kept in step with the distribution.
 pub const VERSION: &str = "0.1.0";
 

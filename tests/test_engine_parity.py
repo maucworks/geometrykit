@@ -135,3 +135,88 @@ class TestAcceleratorParity:
 
     def test_pattern_of_engine_state(self):
         Vec  # names stay import-stable for the Phase 2 dispatch seam
+
+
+@pytest.mark.rust
+@pytest.mark.skipif(not engine.has_rust(), reason="requires geometrykit._rust")
+class TestEvaluationParity:
+    """Port 1: evaluation kernels, mirror vs. extension, bit-for-bit.
+
+    The mirror is the reference: every station pair runs both engines
+    and every float must land on the same IEEE bit pattern -- points,
+    tangents, rational surfaces, clamped stations, domain ends.
+    """
+
+    @staticmethod
+    def _rational() -> Surface:
+        """Same poles under a positive weight grid (rational path)."""
+        import math
+
+        surf = _surface()
+        weights = [
+            [1.0 + 0.5 * math.sin(1.3 * i + 0.7 * j + 0.2) for j in range(4)]
+            for i in range(4)
+        ]
+        return Surface(
+            surf.control_points,
+            surf.uknots, surf.vknots, surf.umults, surf.vmults,
+            surf.udegree, surf.vdegree,
+            weights,
+        )
+
+    @staticmethod
+    def _station_pairs() -> list:
+        pairs = []
+        for u in _STATIONS:
+            for v in _STATIONS:
+                pairs.append((u, v))
+        # clamping: outside-domain stations collapse to the clamp
+        for u, v in ((-0.25, 0.5), (1.5, -0.5), (1.25, 1.25), (-1.0, -1.0)):
+            pairs.append((u, v))
+        return pairs
+
+    def _compare_points(self, surf):
+        from geometrykit import _rust
+
+        pairs = self._station_pairs()
+        mine = [surf.point_at(u, v) for u, v in pairs]
+        mine_rows = [(p.x, p.y, p.z) for p in mine]
+        theirs = _rust.eval_point_grid(surf, [u for u, _ in pairs], [v for _, v in pairs])
+        assert len(theirs) == 3 * len(pairs)
+        got = [(theirs[k], theirs[k + 1], theirs[k + 2]) for k in range(0, len(theirs), 3)]
+        for (a, b) in zip(mine_rows, got):
+            for va, vb in zip(a, b):
+                assert contract.float_to_hex(va) == contract.float_to_hex(vb), (va, vb)
+        assert _sig(mine_rows) == _sig(got)
+
+    def test_point_grid_bicubic(self):
+        self._compare_points(_surface())
+
+    def test_point_grid_rational(self):
+        self._compare_points(self._rational())
+
+    def _compare_all(self, surf):
+        from geometrykit import _rust
+        from geometrykit.runtimes._npu import surface_np
+
+        pairs = self._station_pairs()
+        mine = [surface_np.eval_all(surf, u, v) for u, v in pairs]
+        mine_rows = [
+            (pt.x, pt.y, pt.z, su.x, su.y, su.z, sv.x, sv.y, sv.z)
+            for pt, su, sv in mine
+        ]
+        theirs = _rust.eval_all_grid(surf, [u for u, _ in pairs], [v for _, v in pairs])
+        assert len(theirs) == 9 * len(pairs)
+        got = [
+            tuple(theirs[k:k + 9]) for k in range(0, len(theirs), 9)
+        ]
+        for (a, b) in zip(mine_rows, got):
+            for va, vb in zip(a, b):
+                assert contract.float_to_hex(va) == contract.float_to_hex(vb), (va, vb)
+        assert _sig(mine_rows) == _sig(got)
+
+    def test_all_grid_bicubic(self):
+        self._compare_all(_surface())
+
+    def test_all_grid_rational(self):
+        self._compare_all(self._rational())

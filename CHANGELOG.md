@@ -12,6 +12,14 @@
   stability across two builds of the same kernel data and, with the
   extension present, cross-language float-bit agreement on every
   kernel result — the gate Phase 2 ports land against.
+- **Phase 2 port 1: evaluation kernels** (`geometrykit-core::eval`,
+  `geometrykit._rust.eval_point_grid/eval_all_grid`): the Piegl basis
+  build, point, and both analytic tangents ported verbatim from the
+  mirror (same A2.1/A2.2 spans, right-limit derivative convention, same
+  accumulation order). Mirror vs. extension compared bit-for-bit on a
+  deterministic saddle patch and its rational twin, including clamped
+  stations and both domain ends: every IEEE pattern equal. Batch
+  marshalling: one Python round-trip per grid, not per station.
 
 - **Energy-minimising plate fill** (`patch_np.discrete_plate_fill`,
   `linalg_np.plate_fill`): the interior is the thin-plate solution through

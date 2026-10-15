@@ -1,11 +1,13 @@
 //! `_rust` — the geometrykit accelerator extension module, built by
 //! maturin from `crates/geometrykit-py`.
 //!
-//! Marshalling only: numpy/plain floats in, calls into
+//! Marshalling only: numpy/plain containers in, calls into
 //! `geometrykit-core`, numbers out. No geometry logic lives here — the
 //! kernels belong in `-core`, and anything wrong is wrong there.
 
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyList;
 
 /// Engine-version stamp of the core, so parity tests can hold the two
 /// sides honest about what they were built against.
@@ -21,10 +23,108 @@ fn bits_hex(x: f64) -> String {
     geometrykit_core::bits_hex(x)
 }
 
+/// Read a Python `Surface`'s data into the core payload.
+///
+/// Marshalling only: attributes read, numbers converted, poles
+/// flattened row-major in the mirror's (i = u-direction) outer order.
+fn _payload(surface: &Bound<'_, PyAny>) -> PyResult<geometrykit_core::eval::Surface> {
+    let cps = surface.getattr("control_points")?;
+    let rows = cps.cast::<PyList>()?;
+    let nu = rows.len();
+    let mut poles = Vec::new();
+    let mut nv: Option<usize> = None;
+    for row in rows.iter() {
+        let row = row.cast::<PyList>()?;
+        let n = row.len();
+        match nv {
+            Some(0) => {}
+            None => nv = Some(n),
+            Some(m) if m != n => {
+                return Err(PyValueError::new_err(
+                    "Surface control_points is not rectangular",
+                ))
+            }
+            _ => {}
+        }
+        for p in row.iter() {
+            let x: f64 = p.getattr("x")?.extract()?;
+            let y: f64 = p.getattr("y")?.extract()?;
+            let z: f64 = p.getattr("z")?.extract()?;
+            poles.push([x, y, z]);
+        }
+    }
+    let nv = nv.unwrap_or(0);
+    let pu: usize = surface.getattr("udegree")?.extract()?;
+    let pv: usize = surface.getattr("vdegree")?.extract()?;
+    let uknots: Vec<f64> = surface.getattr("uknots")?.extract()?;
+    let umults: Vec<usize> = surface.getattr("umults")?.extract()?;
+    let vknots: Vec<f64> = surface.getattr("vknots")?.extract()?;
+    let vmults: Vec<usize> = surface.getattr("vmults")?.extract()?;
+    let weights_raw = surface.getattr("_weights")?;
+    let weights: Option<Vec<f64>> = if weights_raw.is_none() {
+        None
+    } else {
+        Some(
+            weights_raw
+                .extract::<Vec<Vec<f64>>>()?
+                .into_iter()
+                .flatten()
+                .collect(),
+        )
+    };
+    Ok(geometrykit_core::eval::Surface::new(
+        poles, nu, nv, weights, pu, pv, &uknots, &umults, &vknots, &vmults,
+    ))
+}
+
+/// Evaluate the point grid for station pairs (`us[i], vs[i]`); flat
+/// `[x, y, z] * n` out. One Python round-trip, whatever the grid size.
+#[pyfunction]
+fn eval_point_grid(
+    surface: &Bound<'_, PyAny>,
+    us: Vec<f64>,
+    vs: Vec<f64>,
+) -> PyResult<Vec<f64>> {
+    if us.len() != vs.len() {
+        return Err(PyValueError::new_err("us and vs must pair 1:1"));
+    }
+    let s = _payload(surface)?;
+    let mut out = Vec::with_capacity(us.len() * 3);
+    for (u, v) in us.iter().zip(&vs) {
+        let p = s.eval_point(*u, *v);
+        out.extend_from_slice(&p);
+    }
+    Ok(out)
+}
+
+/// Point + both analytic tangents per station pair; flat
+/// `[x, y, z, sux, suy, suz, svx, svy, svz] * n` out.
+#[pyfunction]
+fn eval_all_grid(
+    surface: &Bound<'_, PyAny>,
+    us: Vec<f64>,
+    vs: Vec<f64>,
+) -> PyResult<Vec<f64>> {
+    if us.len() != vs.len() {
+        return Err(PyValueError::new_err("us and vs must pair 1:1"));
+    }
+    let s = _payload(surface)?;
+    let mut out = Vec::with_capacity(us.len() * 9);
+    for (u, v) in us.iter().zip(&vs) {
+        let e = s.eval_all(*u, *v);
+        out.extend_from_slice(&e.pt);
+        out.extend_from_slice(&e.su);
+        out.extend_from_slice(&e.sv);
+    }
+    Ok(out)
+}
+
 /// Python module bootstrap. Extension comes in as `geometrykit._rust`.
 #[pymodule]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(core_version, m)?)?;
     m.add_function(wrap_pyfunction!(bits_hex, m)?)?;
+    m.add_function(wrap_pyfunction!(eval_point_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(eval_all_grid, m)?)?;
     Ok(())
 }
