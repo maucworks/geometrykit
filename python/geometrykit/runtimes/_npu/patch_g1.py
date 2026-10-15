@@ -64,8 +64,10 @@ the normal there, so it does not care whether the support is one-sided
 
 from __future__ import annotations
 
+import math
 from typing import Sequence
 
+from geometrykit.cage import CoordinateSystem, Corner
 from geometrykit.geometry.primitives import Vec
 from geometrykit.runtimes._npu.curve_np import _nonzero_basis
 from geometrykit.runtimes._npu.patch_np import (
@@ -109,7 +111,13 @@ def _field_samples(field, params: Sequence[float], corner_stations: int = 1) -> 
 
     The corner band (the outermost ``corner_stations`` on each end) is
     dropped: there the cross-derivative is pinned by the two boundary
-    curves and is not free to move (see the module docstring).
+    curves and is not free to move (see the module docstring). At 0 only
+    the corner *points* stay free while the adjacent stations are
+    constrained as well -- measured strictly better at fine density (the
+    flowing roof at NU=16: band residual 2.8e-02 -> 1.4e-12), but the
+    extra rows need the resolution: at coarse density they trade against
+    their neighbours (NU=12: station-2 slope 6% off, G1-strength suite
+    breaks), so callers below the shipped density keep the default.
     """
     lo = 1 + max(int(corner_stations), 0)
     hi = len(params) - 1 - max(int(corner_stations), 0)
@@ -444,6 +452,180 @@ def support_curvature_field(support, spine, towards=None, step: float = 1e-5, to
         ) / speed_sq
 
     return curvature
+
+
+def _normal_at(field, t: float) -> tuple:
+    """One edge's unit normal at a patch parameter, any accepted field form."""
+    if isinstance(field, dict):
+        fn = field["normal"]
+    elif callable(field):
+        fn = field
+    else:
+        raise G1Error("a corner report needs callable constraint fields")
+    return _unit(fn(t))
+
+
+_CORNERS = (
+    ("SW", (("south", 0.0), ("west", 0.0))),
+    ("SE", (("south", 1.0), ("east", 0.0))),
+    ("NE", (("north", 1.0), ("east", 1.0))),
+    ("NW", (("north", 0.0), ("west", 1.0))),
+)
+
+
+def corner_report(
+    curves,
+    oriented,
+    params_u: Sequence[float],
+    params_v: Sequence[float],
+    edge_normal_fields: dict,
+    surface=None,
+    conflict_tol_deg: float = 0.5,
+) -> dict:
+    """Reconcile the two edges' conditions at each corner, and report it.
+
+    At every patch corner two constraint fields meet -- two tangent planes,
+    two leaving slopes -- overdetermining the corner-adjacent net. This
+    states the mismatch *through the cage datum* instead of absorbing it:
+    a ``CoordinateSystem`` at the corner (plane = the reconciled average)
+    bound to a ``Corner`` carrying both edges' terminal tangent angles, so
+    the conflict is one number per corner (the plane angle) plus the
+    measured residuals, not a silent least-squares compromise.
+
+    A corner whose planes disagree beyond ``conflict_tol_deg`` is flagged
+    conflicting: the OCCT move -- declare the zone G0, press no weights.
+    (On compatible networks like the flowing roof the planes agree to
+    1e-4 degrees and the flag stays down; the adjacent-station rows then
+    apply as usual.)
+
+    With ``surface`` given, the report also measures the finished patch at
+    the corner point and its two adjacent stations against *both* planes.
+
+    Returns ``{"corners": {name: {...}}, "conflict": bool}``. Never raises
+    for geometric disagreement -- that is what the flag is for.
+
+    Field callables take *patch* parameters, exactly as `_field_samples`
+    feeds them (wrap spine-parameter specs the way the export driver does).
+    """
+    out: dict = {"corners": {}, "conflict": False, "tol_deg": conflict_tol_deg}
+    for name, ((edge_a, t_a), (edge_b, t_b)) in _CORNERS:
+        field_a = edge_normal_fields.get(edge_a)
+        field_b = edge_normal_fields.get(edge_b)
+        if field_a is None or field_b is None:
+            continue
+        n_a = _normal_at(field_a, t_a)
+        n_b = _normal_at(field_b, t_b)
+        # planes are unoriented for the conflict question (the row machinery
+        # is sign-agnostic: flipping a normal flips both sides of every row),
+        # so orient to a common hemisphere before comparing -- the twisted
+        # ridge ribbon's normal points down where its neighbours' point up.
+        dot = n_a[0] * n_b[0] + n_a[1] * n_b[1] + n_a[2] * n_b[2]
+        if dot < 0.0:
+            n_b = (-n_b[0], -n_b[1], -n_b[2])
+            dot = -dot
+        dot = max(-1.0, min(1.0, dot))
+        angle_deg = math.degrees(math.acos(dot))
+        slope_a = _slope_of(field_a, t_a)
+        slope_b = _slope_of(field_b, t_b)
+
+        entry: dict = {
+            "edges": (edge_a, edge_b),
+            "plane_angle_deg": angle_deg,
+            "slope_a": None if slope_a is None else _vec_len(slope_a),
+            "slope_b": None if slope_b is None else _vec_len(slope_b),
+            "conflict": angle_deg > conflict_tol_deg,
+            "datum": _corner_datum(
+                curves, oriented, edge_a, t_a, edge_b, t_b, n_a, n_b
+            ),
+        }
+        if surface is not None:
+            entry["measured"] = _measure_corner(
+                surface, edge_normal_fields,
+                edge_a, t_a, edge_b, t_b, params_u, params_v,
+            )
+        out["corners"][name] = entry
+        out["conflict"] = out["conflict"] or entry["conflict"]
+    return out
+
+
+def _vec_len(v) -> float:
+    return (v[0] ** 2 + v[1] ** 2 + v[2] ** 2) ** 0.5
+
+
+def _corner_datum(curves, oriented, edge_a, t_a, edge_b, t_b, n_a, n_b):
+    """The cage datum: frame at the corner + both terminals' angles.
+
+    Returns None when neither field spec carries its spine (no curve to
+    read the position and departure tangents from) -- the plane report
+    above never depends on it.
+    """
+    avg = _unit((n_a[0] + n_b[0], n_a[1] + n_b[1], n_a[2] + n_b[2]))
+    index_of = {"south": 0, "east": 1, "north": 2, "west": 3}
+    terminals = {}
+    position = None
+    for edge, t in ((edge_a, t_a), (edge_b, t_b)):
+        curve_params = edge_curve_params(oriented, edge, [t])
+        curve = curves[index_of[edge]]
+        tangent = curve.tangent_at(curve_params[0])
+        point = curve.point_at(curve_params[0])
+        position = (point.x, point.y, point.z)
+        terminals[edge] = (tangent.x, tangent.y, tangent.z)
+    frame = CoordinateSystem.from_plane(position, avg)
+    matrix = frame.matrix()
+    angles = {}
+    for edge, tangent in terminals.items():
+        # world -> local is the transpose; the angle lives in frame XY
+        local = (
+            matrix[0] * tangent[0] + matrix[3] * tangent[1] + matrix[6] * tangent[2],
+            matrix[1] * tangent[0] + matrix[4] * tangent[1] + matrix[7] * tangent[2],
+        )
+        angles[edge] = math.atan2(local[1], local[0])
+    return Corner(frame, angles)
+
+
+def _measure_corner(
+    surface, fields, edge_a, t_a, edge_b, t_b, params_u, params_v
+) -> dict:
+    """G1 residuals at the corner's own stations, each against its own plane.
+
+    Per edge: the corner point and the adjacent station *inward from that
+    corner*, each measured against the support plane *at that station* --
+    never the far end (whose plane has twisted away on ribbons like the
+    ridge), and never carried over from a station whose normal was sampled
+    under a different mapping (reversed edges mirror value-based lookups
+    onto the wrong end -- a 0.5+ phantom defect on a 1e-12 surface). The
+    ribbon ends genuinely flare (~1-3 degrees per station on the roof),
+    so station-local comparison is the only honest one. Plus each corner
+    point against the OTHER edge's corner plane (the cross-edge check).
+    """
+    measured: dict = {}
+
+    def _cross(edge, t):
+        if edge == "south":
+            return surface.tangents_at(t, 0.0)[1]
+        if edge == "north":
+            return surface.tangents_at(t, 1.0)[1]
+        if edge == "west":
+            return surface.tangents_at(0.0, t)[0]
+        return surface.tangents_at(1.0, t)[0]
+
+    for edge, t_corner in ((edge_a, t_a), (edge_b, t_b)):
+        params = params_u if edge in ("south", "north") else params_v
+        t_adj = params[1] if t_corner == 0.0 else params[-2]
+        for label, t in (("corner", t_corner), ("adjacent", t_adj)):
+            normal = _normal_at(fields[edge], t)
+            cross = _cross(edge, t)
+            measured[f"{edge}_{label}"] = abs(
+                cross.x * normal[0] + cross.y * normal[1] + cross.z * normal[2]
+            )
+    n_a = _normal_at(fields[edge_a], t_a)
+    n_b = _normal_at(fields[edge_b], t_b)
+    for edge, t, other in ((edge_a, t_a, n_b), (edge_b, t_b, n_a)):
+        cross = _cross(edge, t)
+        measured[f"{edge}_corner_vs_other"] = abs(
+            cross.x * other[0] + cross.y * other[1] + cross.z * other[2]
+        )
+    return measured
 
 
 def support_constraint(support, spine, towards=None, tol: float = 1e-4) -> dict:
