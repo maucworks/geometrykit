@@ -41,6 +41,18 @@
   env): 0.717 s routed vs 0.754 s mirror -- the residual per-call
   saving P0's cache did not already collapse; row assembly remains the
   dominant share and is port 3's target.
+- **Phase 2 port 3: batched basis rows** (`geometrykit-core::basis`,
+  `geometrykit._rust.basis_row_grid`, `dispatch.basis_row_list`): the
+  row-assembly primitive of the G1/G2 edge systems batched over
+  stations (verbatim `_nonzero_basis` port: same A2.2, same edge-aware
+  span, same 1e-12 guards, mirror dict order preserved for `.items()`
+  consumers). All five `patch_g1` call sites cut to the batched
+  dispatch. Parity: single- and multi-span knot vectors, degrees 2-3,
+  30 stations including duplicates, interior knots and domain ends --
+  every id and float bit-identical to `curve_np._nonzero_basis`. Suite
+  configs: plain 677/0 x2, oracle 677/0. Timing, shipped front patch:
+  0.682 s routed vs 0.750 s mirror (the cutover gain doubled with the
+  batched rows).
 
 - **Energy-minimising plate fill** (`patch_np.discrete_plate_fill`,
   `linalg_np.plate_fill`): the interior is the thin-plate solution through

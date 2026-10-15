@@ -12,6 +12,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod basis;
 pub mod eval;
 
 /// Kernels crate version, kept in step with the distribution.

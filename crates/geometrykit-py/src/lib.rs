@@ -143,6 +143,25 @@ fn project_grid(surface: &Bound<'_, PyAny>, pts: Vec<f64>) -> PyResult<Vec<f64>>
     Ok(out)
 }
 
+/// Batched basis rows over an expanded knot vector: station-major
+/// `(ids, values)` with the value stride `degree + 1`. Marshalling only.
+#[pyfunction]
+fn basis_row_grid(
+    uflat: Vec<f64>,
+    degree: usize,
+    stations: Vec<f64>,
+) -> PyResult<(Vec<usize>, Vec<f64>)> {
+    let rows = geometrykit_core::basis::basis_rows(degree, &uflat, &stations);
+    let stride = degree + 1;
+    let mut ids = Vec::with_capacity(stations.len());
+    let mut vals = Vec::with_capacity(stations.len() * stride);
+    for (id, n) in rows {
+        ids.push(id);
+        vals.extend(n);
+    }
+    Ok((ids, vals))
+}
+
 /// Python module bootstrap. Extension comes in as `geometrykit._rust`.
 #[pymodule]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -151,5 +170,6 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(eval_point_grid, m)?)?;
     m.add_function(wrap_pyfunction!(eval_all_grid, m)?)?;
     m.add_function(wrap_pyfunction!(project_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(basis_row_grid, m)?)?;
     Ok(())
 }

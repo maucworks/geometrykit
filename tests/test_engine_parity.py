@@ -333,3 +333,77 @@ class TestRoutedParity:
             ):
                 assert contract.float_to_hex(a) == contract.float_to_hex(b)
 
+
+@pytest.mark.rust
+@pytest.mark.skipif(not engine.has_rust(), reason="requires geometrykit._rust")
+class TestBasisRowParity:
+    """Port 3: batched basis rows, mirror vs. extension, bit-for-bit.
+
+    Fixtures include a single-span (the saddle's) and a multi-span
+    knot vector, stations across interiors and both double-knot
+    interiors — the shapes the fill's rows actually hit.
+    """
+
+    @staticmethod
+    def _knot_sets() -> "list[list[float]]":
+        single = [vec[:] for vec in (
+            [0.0] * 4, [1.0] * 4,
+        )]
+        multi: list = []
+        for group in ([0.0] * 4, [0.25] * 2, [0.5] * 2, [0.75] * 2, [1.0] * 4):
+            multi.extend(group)
+        return [single[0] + single[1], multi]
+
+    def _stations(self, uflat) -> "list[float]":
+        import random
+
+        rng = random.Random(20261016)
+        base = list(_STATIONS) + [
+            0.9999999999, 1.0e-12, 0.25, 0.5, 0.75,
+            uflat[len(uflat) // 2],
+        ]
+        base += [rng.uniform(0.0, 1.0) for _ in range(24)]
+        return sorted(set(float(t) for t in base))
+
+    def test_row_grid_matches_mirror(self):
+        from geometrykit import _rust
+        from geometrykit.runtimes._npu import curve_np
+
+        for uflat in self._knot_sets():
+            ts = self._stations(uflat)
+            for degree in (2, 3):
+                mine = [curve_np._nonzero_basis(t, degree, uflat) for t in ts]
+                ids, vals = _rust.basis_row_grid(
+                    list(uflat), degree, list(ts)
+                )
+                stride = degree + 1
+                for k, ref in enumerate(mine):
+                    first = ids[k]
+                    assert set(range(first, first + stride)) == set(ref.keys()), (
+                        degree, k,
+                    )
+                    for j in range(stride):
+                        rid = first + j
+                        assert (
+                            contract.float_to_hex(vals[k * stride + j])
+                            == contract.float_to_hex(ref.get(rid, 0.0))
+                        ), (degree, k, rid)
+
+    def test_dispatch_list_matches_mirror(self):
+        from geometrykit.runtimes import dispatch
+        from geometrykit.runtimes._npu import curve_np
+
+        for uflat in self._knot_sets():
+            ts = self._stations(uflat) * 2  # duplicates included
+            for degree in (2, 3):
+                dispatch_rows = dispatch.basis_row_list(degree, uflat, ts)
+                for k, t in enumerate(ts):
+                    ref = curve_np._nonzero_basis(t, degree, uflat)
+                    row = dispatch_rows[k]
+                    for rid, v in ref.items():
+                        assert (
+                            contract.float_to_hex(row.get(rid, 0.0))
+                            == contract.float_to_hex(v)
+                        ), (degree, k, rid)
+                    assert list(row.items())[len(row) - 1][0] == max(ref)
+

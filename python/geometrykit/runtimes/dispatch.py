@@ -27,6 +27,30 @@ def _rust() -> object | None:
     return _rust
 
 
+def basis_row_list(degree: int, uflat, stations):
+    """`[{id: N}, ...]` per station, in order (engine-batched).
+
+    Mirror `curve_np._nonzero_basis` under the active engine; dict
+    insertion order is the mirror's (increasing id), as `.items()`
+    consumers rely on it.
+    """
+    accel = _rust()
+    if accel is None:
+        from geometrykit.runtimes._npu import curve_np
+
+        return [curve_np._nonzero_basis(t, degree, uflat) for t in stations]
+    from geometrykit import _rust as _ext
+
+    ids, vals = _ext.basis_row_grid(list(uflat), int(degree), [
+        float(t) for t in stations
+    ])
+    stride = int(degree) + 1
+    return [
+        {ids[k] + j: vals[k * stride + j] for j in range(stride)}
+        for k in range(len(stations))
+    ]
+
+
 def eval_point(surf, u: float, v: float):
     """Mirror `surface_np.eval_point` under the active engine."""
     from geometrykit.runtimes._npu import surface_np
