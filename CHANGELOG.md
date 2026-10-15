@@ -1,4 +1,5 @@
-# Unreleased — the energy fill (M0-M8) + OCC-free pipeline
+# v0.4.0 — 2026-10-15 (first upload under this version; the 0.2.0/0.3.0
+# milestones below were internal trains without a PyPI upload)
 
 - **Rust scaffold, Phase 1** (`crates/`): the engine split now exists.
   `crates/geometrykit-core` holds the kernels in pure Rust (no pyo3,
