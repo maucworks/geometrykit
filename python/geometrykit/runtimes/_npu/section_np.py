@@ -425,16 +425,34 @@ def weave_diagrid(surf, tracks_a: list, tracks_b: list) -> tuple:
 
     def _interpolate(vecs):
         from geometrykit.geometry.primitives import Vec as _V
+        from geometrykit.runtimes import dispatch
 
         vecs = [_V(*q) for q in vecs]
         # free ends: samples lie exactly on the surface, so the plain
         # chord-parameterised interpolation stays on it (measured 4e-07
         # off-surface on a 123-sample woven chain); end-tangent clamps --
         # unit or chord-scaled -- whip the end spans (measured 6e-03).
+        # Assembly mirrors Curve.from_points exactly (degree clamp +
+        # constructor fields), with the engine dispatch underneath.
+        degree = max(1, min(3, len(vecs) - 1))
         try:
-            return _Curve.from_points(vecs)
-        except RuntimeError:
-            return _Curve.from_points(vecs, degree=1)
+            cpts, knots, mults = dispatch.interpolate(vecs, degree=degree)
+            return _Curve(
+                control_points=[_V(*c) for c in cpts],
+                knots=knots,
+                multiplicities=mults,
+                degree=degree,
+                closed=False,
+            )
+        except (ValueError, RuntimeError):
+            cpts, knots, mults = dispatch.interpolate(vecs, degree=1)
+            return _Curve(
+                control_points=[_V(*c) for c in cpts],
+                knots=knots,
+                multiplicities=mults,
+                degree=1,
+                closed=False,
+            )
 
     curves_a = [_interpolate(t) for t in tracks_a]
     curves_b = [_interpolate(t) for t in tracks_b]

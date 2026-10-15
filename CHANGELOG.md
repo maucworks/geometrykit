@@ -80,10 +80,26 @@
   pairwise probing), so each A segment only tests the B segments whose
   boxes share a cell. Measured on the shipped diagrid: the 2D crossing
   search 845 -> 83 ms, weave total 1068 -> 302 ms; full workflow
-  (export incl. sections, weave, 1129 nodes, 1128normal spikes, two
+  (export incl. sections, weave, 1129 nodes, 1128 normal spikes, two
   STEP writes) 1.95 -> 1.12 s. One near-duplicate twin node now
   resolves to the other member of its pair (1128 -> 1129 nodes); all
   invariant gates hold (plane residual, exactness, determinism).
+- **Phase 2 ports 5+6: section marching + curve interpolation in core**
+  (`geometrykit-core::section`, `::interp`,
+  `geometrykit._rust.section_levels_grid/interpolate_grid`,
+  `dispatch.plane_section_chains/interpolate`): the level-set
+  marching (field grid, saddle-cell pairing, greedy chaining, Newton
+  polish) and the A9.1/A9.2 global interpolation (chord params,
+  averaged knots, full-Jordan dense solve) ported verbatim.
+  `Surface.section_levels` and the weave's knot assembly ride the
+  extension when present. One chaining bug was caught by the parity
+  gate itself: the mirror branches prepend/append on the loop token,
+  not position -- they disagree when a degenerate first segment
+  collapses the chain to one point (measured 57 vs 58 points on the
+  A-family level 14). Engine determinism restored and suite-tested.
+  Measured on the shipped diagrid: sections 551 -> 135 ms, weave 302
+  -> 91 ms, whole exported workflow 1.95 -> 0.44 s. Suites: plain
+  691/0 x2 configs; core 18/18.
 
 - **Energy-minimising plate fill** (`patch_np.discrete_plate_fill`,
   `linalg_np.plate_fill`): the interior is the thin-plate solution through

@@ -5,7 +5,7 @@
 //! `geometrykit-core`, numbers out. No geometry logic lives here — the
 //! kernels belong in `-core`, and anything wrong is wrong there.
 
-use pyo3::exceptions::{PyZeroDivisionError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyZeroDivisionError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
@@ -200,6 +200,80 @@ fn banded_solve_grid(
     Ok(geometrykit_core::linalg::banded_solve(&factor, &rhs, n, bandwidth))
 }
 
+/// Global cubic interpolation: flat points `[x, y, z] * n`, optional
+/// end tangents (also flat triples), optional explicit parameters.
+/// Returns `(control points flat xyz, knots, multiplicities)`.
+#[pyfunction]
+fn interpolate_grid(
+    pts: Vec<f64>,
+    degree: usize,
+    tan_start: Option<Vec<f64>>,
+    tan_end: Option<Vec<f64>>,
+    knots_param: Option<Vec<f64>>,
+) -> PyResult<(Vec<f64>, Vec<f64>, Vec<usize>)> {
+    if pts.len() % 3 != 0 {
+        return Err(PyValueError::new_err("pts must be flat xyz triples"));
+    }
+    let grid: Vec<[f64; 3]> = pts
+        .chunks_exact(3)
+        .map(|c| [c[0], c[1], c[2]])
+        .collect();
+    let ts = tan_start.map(|t| [t[0], t[1], t[2]]);
+    let te = tan_end.map(|t| [t[0], t[1], t[2]]);
+    let out = geometrykit_core::interp::interpolate(&grid, degree, ts, te, knots_param)
+        .map_err(|e| match e {
+            geometrykit_core::interp::InterpError::Arg(msg) => {
+                PyValueError::new_err(msg)
+            }
+            geometrykit_core::interp::InterpError::Singular(msg) => {
+                PyRuntimeError::new_err(msg)
+            }
+        })?;
+    let flat = out
+        .control_points
+        .iter()
+        .flat_map(|c| c.iter().copied())
+        .collect::<Vec<f64>>();
+    Ok((flat, out.knots, out.mults))
+}
+
+/// Section chains, flat: `[n_offsets, n_chains_off0, (n_pts, uv*2,
+/// xyz*3)..., n_chains_off1, ...]`. Counts ride as exact f64 integers.
+#[pyfunction]
+fn section_levels_grid(
+    surface: &Bound<'_, PyAny>,
+    origin: Vec<f64>,
+    normal: Vec<f64>,
+    offsets: Vec<f64>,
+    nu: usize,
+    nv: usize,
+) -> PyResult<Vec<f64>> {
+    if origin.len() != 3 || normal.len() != 3 {
+        return Err(PyValueError::new_err("origin/normal must be triples"));
+    }
+    let s = _payload(surface)?;
+    let o = [origin[0], origin[1], origin[2]];
+    let n = [normal[0], normal[1], normal[2]];
+    let out = geometrykit_core::section::section_levels(&s, o, n, &offsets, nu, nv)
+        .map_err(PyValueError::new_err)?;
+    let mut flat = Vec::new();
+    flat.push(out.len() as f64);
+    for chains in &out {
+        flat.push(chains.len() as f64);
+        for chain in chains {
+            flat.push(chain.uvs.len() as f64);
+            for uv in &chain.uvs {
+                flat.push(uv[0]);
+                flat.push(uv[1]);
+            }
+            for p in &chain.pts {
+                flat.extend_from_slice(p);
+            }
+        }
+    }
+    Ok(flat)
+}
+
 /// Python module bootstrap. Extension comes in as `geometrykit._rust`.
 #[pymodule]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -211,5 +285,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(basis_row_grid, m)?)?;
     m.add_function(wrap_pyfunction!(banded_cholesky_grid, m)?)?;
     m.add_function(wrap_pyfunction!(banded_solve_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(interpolate_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(section_levels_grid, m)?)?;
     Ok(())
 }

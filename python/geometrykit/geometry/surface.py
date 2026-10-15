@@ -255,13 +255,15 @@ class Surface:
 
         Same plane normal, several offsets along it -- the configurator's
         slice workload. Returns one `CurveOnSurface` list per offset, in
-        order; offsets missing the surface give empty lists.
+        order; offsets missing the surface give empty lists. Kernel path
+        is engine-dispatched (mirror or `_rust`, bit-parity harness).
         """
-        from geometrykit.runtimes._npu import section_np
+        from geometrykit.runtimes import dispatch
 
         n = plane.z_axis
-        batches = section_np.section_levels(
-            self, (plane.origin.x, plane.origin.y, plane.origin.z),
+        batches = dispatch.plane_section_chains(
+            self,
+            (plane.origin.x, plane.origin.y, plane.origin.z),
             (n.x, n.y, n.z), list(offsets), nu=nu, nv=nv,
         )
         return [[entry for entry in _section_curves(self, chains)] for chains in batches]

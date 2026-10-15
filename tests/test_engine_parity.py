@@ -386,8 +386,9 @@ class TestBasisRowParity:
                         rid = first + j
                         assert (
                             contract.float_to_hex(vals[k * stride + j])
-                            == contract.float_to_hex(ref.get(rid, 0.0))
+                            == contract.float_to_hex(ref[rid])
                         ), (degree, k, rid)
+
 
     def test_dispatch_list_matches_mirror(self):
         from geometrykit.runtimes import dispatch
@@ -407,6 +408,143 @@ class TestBasisRowParity:
                         ), (degree, k, rid)
                     assert list(row.items())[len(row) - 1][0] == max(ref)
 
+
+@pytest.mark.rust
+@pytest.mark.skipif(not engine.has_rust(), reason="requires geometrykit._rust")
+class TestInterpolationParity:
+    """Port 6: global interpolation, mirror vs. extension, bit-for-bit."""
+
+    @staticmethod
+    def _point_sets() -> "list[list[_Vec]]":
+        import math as _m
+        import random as _r
+
+        rng = _r.Random(20261017)
+        sine = [
+            _Vec(k * 0.2, _m.sin(k * 0.5) * (1.0 if k % 2 else 0.7), 0.0)
+            for k in range(50)
+        ]
+        kinked = [
+            _Vec(k, k if k < 3 else 6.0 - k, 0.0) for k in range(6)
+        ]
+        hammered = [
+            _Vec(rng.uniform(-1, 1) * 3.0, rng.uniform(-1, 1) * 2.0, rng.uniform(-1, 1))
+            for _ in range(40)
+        ]
+        return [sine, kinked, hammered]
+
+    @staticmethod
+    def _compare(points, **kwargs):
+        from geometrykit.runtimes import dispatch
+        from geometrykit.runtimes._npu import curve_np
+
+        c_mirror, k_mirror, m_mirror = curve_np.interpolate(
+            points, **kwargs
+        )
+        c_rust, k_rust, m_rust = dispatch.interpolate(points, **kwargs)
+        assert k_rust == k_mirror and m_rust == m_mirror
+        for a, b in zip(c_mirror, c_rust):
+            for va, vb in zip(a, b):
+                assert contract.float_to_hex(va) == contract.float_to_hex(vb), (a, b)
+
+    def test_free_and_tangent_cases(self):
+        for pts_ in self._point_sets():
+            self._compare(pts_)
+            self._compare(
+                pts_, tan_start=_Vec(1, 0, 0), tan_end=_Vec(1, 0, 0)
+            )
+            self._compare(pts_, degree=1)
+
+    def test_explicit_params(self):
+        import math
+
+        pts_ = [_Vec(k, math.sin(k * 0.7), 0.0) for k in range(24)]
+        total = 0.0
+        params = [0.0]
+        for a, b in zip(pts_, pts_[1:]):
+            total += abs(a - b)
+            params.append(total)
+        params = [p / total for p in params]
+        self._compare(pts_, knots_param=params)
+        self._compare(pts_, knots_param=params, degree=2)
+
+    def test_singular_has_the_error(self):
+        from geometrykit.runtimes import dispatch
+        from geometrykit.runtimes._npu import curve_np
+
+        # identical points collapse chord params to all-zeros: the
+        # elimination has one pivot column with no pivot (mirror:
+        # RuntimeError; the extension maps core's Singular kind to the
+        # same type)
+        bad = [_Vec(0.0, 0.0, 0.0)] * 3
+        for fn in (curve_np.interpolate, dispatch.interpolate):
+            with pytest.raises(RuntimeError, match="singular"):
+                fn(bad, degree=3)
+
+
+@pytest.mark.rust
+@pytest.mark.skipif(not engine.has_rust(), reason="requires geometrykit._rust")
+class TestSectionParity:
+    """Port 5: level-set sections, mirror vs. extension, bit-for-bit.
+
+    The saddle fixture with offset sweeps spanning [empty ... grazing
+    ... mid ... empty]: every chain's uv track AND evaluated 3D points
+    compared bitwise; empty offsets empty in both engines.
+    """
+
+    def test_single_plane_spread(self):
+        from geometrykit.runtimes import dispatch
+        from geometrykit.runtimes._npu import section_np
+
+        surf = _surface()
+        normal = (1.0, 0.3, 0.4)
+        for off in (-0.5, 0.0, 0.5):
+            origin = (0.5 + off * normal[0], 0.5 + off * normal[1], 2.6 + off * normal[2])
+            mine = dispatch.plane_section_chains(surf, list(origin), list(normal), [0.0], 12, 12)[0]
+            ref = section_np.section_plane(surf, origin, normal, nu=12, nv=12)
+            assert len(mine) == len(ref), off
+            for (m_pts, m_uvs), (r_pts, r_uvs) in zip(mine, ref):
+                assert len(m_pts) == len(r_pts), off
+                for (pm, um), (pr, ur) in zip(zip(m_pts, m_uvs), zip(r_pts, r_uvs)):
+                    for a, b in (
+                        (pm[0], pr[0]), (pm[1], pr[1]), (pm[2], pr[2]),
+                        (um[0], ur[0]), (um[1], ur[1]),
+                    ):
+                        assert (
+                            contract.float_to_hex(a) == contract.float_to_hex(b)
+                        ), (off, a, b)
+
+    def test_levels_bitwise_vs_mirror(self):
+        from geometrykit.runtimes import dispatch
+        from geometrykit.runtimes._npu import section_np
+
+        surf = _surface()
+        origin = (0.5, 0.5, 2.6)
+        normal = (1.0, 0.3, 0.4)
+        offsets = [-1.0, -0.2, 0.0, 0.2, 0.6, 1.0]
+        mine = dispatch.plane_section_chains(
+            surf, list(origin), list(normal), offsets, 48, 48
+        )
+        ref = section_np.section_levels(
+            surf, origin, normal, offsets, nu=48, nv=48
+        )
+        assert len(mine) == len(ref) == len(offsets)
+        for chains_m, chains_r, off in zip(mine, ref, offsets):
+            same_empty = (not chains_m) or (not chains_r)
+            if same_empty:
+                assert len(chains_m) == len(chains_r), (off, chains_m, chains_r)
+                continue
+            assert len(chains_m) == len(chains_r), off
+            for (m_pts, m_uvs), (r_pts, r_uvs) in zip(chains_m, chains_r):
+                assert len(m_pts) == len(r_pts), off
+                for (pm, um), (pr, ur) in zip(
+                    zip(m_pts, m_uvs), zip(r_pts, r_uvs)
+                ):
+                    for a, b in ((pm[0], pr[0]), (pm[1], pr[1]), (pm[2], pr[2]),
+                                 (um[0], ur[0]), (um[1], ur[1])):
+                        assert (
+                            contract.float_to_hex(a) == contract.float_to_hex(b)
+                        ), (off, a, b)
 
 @pytest.mark.rust
 @pytest.mark.skipif(not engine.has_rust(), reason="requires geometrykit._rust")

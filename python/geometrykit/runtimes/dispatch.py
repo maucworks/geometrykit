@@ -51,6 +51,87 @@ def basis_row_list(degree: int, uflat, stations):
     ]
 
 
+def plane_section_chains(surf, origin, normal, offsets, nu: int, nv: int):
+    """Mirror `section_np.section_levels` under the active engine.
+
+    Returns `[(points, uvs), ...]` per offset — chains of evaluated 3D
+    points and their parameter tracks, index-aligned, exactly as the
+    mirror's lists. Empty offsets give empty chains.
+    """
+    from geometrykit.runtimes._npu import section_np
+
+    stream = _rust()
+    if stream is None:
+        return section_np.section_levels(surf, origin, normal, offsets, nu=nu, nv=nv)
+    from geometrykit import _rust as _ext
+
+    flat_out = _ext.section_levels_grid(
+        surf,
+        [origin[0], origin[1], origin[2]],
+        [normal[0], normal[1], normal[2]],
+        list(offsets), int(nu), int(nv),
+    )
+    pos = 0
+    n_off = int(flat_out[pos])
+    pos += 1
+    results = []
+    for _ in range(n_off):
+        n_chains = int(flat_out[pos])
+        pos += 1
+        chains = []
+        for _ in range(n_chains):
+            m = int(flat_out[pos])
+            pos += 1
+            uvs = [
+                (flat_out[pos + 2 * k], flat_out[pos + 2 * k + 1])
+                for k in range(m)
+            ]
+            pos += 2 * m
+            pts = []
+            for k in range(m):
+                pts.append((
+                    flat_out[pos + 3 * k],
+                    flat_out[pos + 3 * k + 1],
+                    flat_out[pos + 3 * k + 2],
+                ))
+            pos += 3 * m
+            chains.append((pts, uvs))
+        results.append(chains)
+    return results
+
+
+def interpolate(points, degree: int = 3, tan_start=None, tan_end=None, knots_param=None):
+    """Mirror `curve_np.interpolate` under the active engine.
+
+    Returns `(control_points, knots, multiplicities)` in the mirror's
+    tuples form, so callers can assemble the same `Curve`.
+    """
+    from geometrykit.runtimes._npu import curve_np
+
+    accel = _rust()
+    if accel is None:
+        return curve_np.interpolate(
+            points, degree=degree, tan_start=tan_start, tan_end=tan_end,
+            knots_param=knots_param,
+        )
+    from geometrykit import _rust as _ext
+
+    flat = []
+    for p in points:
+        flat.extend((p.x, p.y, p.z))
+    ts = None if tan_start is None else [tan_start.x, tan_start.y, tan_start.z]
+    te = None if tan_end is None else [tan_end.x, tan_end.y, tan_end.z]
+    cpts_flat, knots, mults = _ext.interpolate_grid(
+        flat, int(degree), ts, te,
+        None if knots_param is None else list(knots_param),
+    )
+    cpts = [
+        (cpts_flat[i], cpts_flat[i + 1], cpts_flat[i + 2])
+        for i in range(0, len(cpts_flat), 3)
+    ]
+    return cpts, knots, mults
+
+
 def banded_cholesky(rows, n: int, bandwidth: int):
     """Mirror `linalg_np.banded_cholesky` under the active engine.
 

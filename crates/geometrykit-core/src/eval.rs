@@ -69,8 +69,17 @@ impl Surface {
         Surface { poles, weights, nu, nv, pu, pv, uflat, vflat }
     }
 
-    fn weight(&self, i: usize, j: usize) -> f64 {
-        match &self.weights {
+    /// Live parameter domain: `(u_min, u_max)` of the expanded knots.
+    pub fn domain_u(&self) -> (f64, f64) {
+        (self.uflat[self.pu], self.uflat[self.uflat.len() - self.pu - 1])
+    }
+
+    /// Live parameter domain: `(v_min, v_max)` of the expanded knots.
+    pub fn domain_v(&self) -> (f64, f64) {
+        (self.vflat[self.pv], self.vflat[self.vflat.len() - self.pv - 1])
+    }
+
+    fn weight(&self, i: usize, j: usize) -> f64 {        match &self.weights {
             None => 1.0,
             Some(w) => w[i * self.nv + j],
         }
