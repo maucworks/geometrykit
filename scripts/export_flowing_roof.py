@@ -110,8 +110,14 @@ def spine_field(edge, spine, support, oriented, params_u, params_v, towards):
     spec = patch_g1.support_constraint(support, spine, towards=towards)
 
     def _map(field):
+        # index-based: patch station k sits over curve_params[k], exactly
+        # (value-based min() mirrors reversed edges onto the wrong end --
+        # found via M5: west runs patch 0->1 over curve 1->0, and min() by
+        # value returns the mirror station. Masked while ribbons were
+        # untwisted; wrong in general).
         def at(t):
-            return field(min(curve_params, key=lambda c: abs(c - t)))
+            k = min(range(len(patch_params)), key=lambda m: abs(patch_params[m] - t))
+            return field(curve_params[k])
 
         return at
 
@@ -205,7 +211,7 @@ def main() -> None:
         }
         surface, _corners, stations = patch_g1.constrained_coons_patch(
             spines, fields, nu=16, nv=16, tangency=TANGENCY, g2=G2, fill=FILL,
-            loose=LOOSE, parametrization=PARAMETRIZATION
+            loose=LOOSE, corner_stations=0, parametrization=PARAMETRIZATION
         )
         if ADAPTIVE:
             # rows-then-fit: the constrained dense field is approximated
