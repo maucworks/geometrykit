@@ -266,6 +266,45 @@ class Curve:
             return Vec(h[0] / h[3], h[1] / h[3], h[2] / h[3])
         return Vec(h[0], h[1], h[2])
 
+    def plane_roots(self, origin, normal, samples: int = 200) -> list:
+        """Parameters where the curve crosses a plane (no OCC).
+
+        Dense sampling finds sign-change brackets of the signed plane
+        distance; each bracket is bisected to machine precision. No
+        Newton polish: `tangent_at` is unit, so a Newton step would need
+        the parametric speed anyway, and bisection alone already lands
+        at 1e-12 -- the polish added risk, not accuracy (measured: unit
+        -tangent Newton diverges off tight brackets and clamps to the
+        ends). Tangential grazes (no sign change) are not reported --
+        stated, not hidden. Returns ascending ``t`` values.
+        """
+        ox, oy, oz = origin.x, origin.y, origin.z
+        nx, ny, nz = normal.x, normal.y, normal.z
+
+        def _signed(t: float) -> float:
+            p = self.point_at(t)
+            return (p.x - ox) * nx + (p.y - oy) * ny + (p.z - oz) * nz
+
+        values = [(k / samples, _signed(k / samples)) for k in range(samples + 1)]
+        roots = []
+        for (t0, f0), (t1, f1) in zip(values, values[1:]):
+            if (f0 < 0.0) == (f1 < 0.0):
+                continue
+            a, b, fa = t0, t1, f0
+            for _ in range(60):
+                m = 0.5 * (a + b)
+                fm = _signed(m)
+                if (fa < 0.0) == (fm < 0.0):
+                    a, fa = m, fm
+                else:
+                    b = m
+                if b - a < 1e-13:
+                    break
+            t = 0.5 * (a + b)
+            if not roots or t - roots[-1] > 1e-9:
+                roots.append(t)
+        return roots
+
     def tangent_at(self, t: float) -> Vec:
         """Evaluate unit tangent at normalised parameter ``t ∈ [0, 1]``.
 

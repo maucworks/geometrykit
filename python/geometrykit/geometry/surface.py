@@ -239,7 +239,6 @@ class Surface:
             plane: a `Plane` (origin + z_axis normal).
             nu/nv: marching grid density in (u, v).
         """
-        from geometrykit.geometry.curve import Curve as _Curve
         from geometrykit.runtimes._npu import section_np
 
         n = plane.z_axis
@@ -247,17 +246,7 @@ class Surface:
             self, (plane.origin.x, plane.origin.y, plane.origin.z),
             (n.x, n.y, n.z), nu=nu, nv=nv,
         )
-        out = []
-        for points, uvs in chains:
-            vecs = [Vec(*p) for p in points]
-            try:
-                curve = _Curve.from_points(vecs)
-            except RuntimeError:
-                # collinear (or otherwise degenerate) runs make the cubic
-                # system singular; a degree-1 run through them is exact
-                curve = _Curve.from_points(vecs, degree=1)
-            out.append(CurveOnSurface(curve=curve, uv=list(uvs), surface=self))
-        return out
+        return _section_curves(self, chains)
 
     def section_levels(self, plane, offsets: Sequence[float],
                        nu: int = 48, nv: int = 48) -> list:
@@ -267,7 +256,6 @@ class Surface:
         slice workload. Returns one `CurveOnSurface` list per offset, in
         order; offsets missing the surface give empty lists.
         """
-        from geometrykit.geometry.curve import Curve as _Curve
         from geometrykit.runtimes._npu import section_np
 
         n = plane.z_axis
@@ -275,18 +263,7 @@ class Surface:
             self, (plane.origin.x, plane.origin.y, plane.origin.z),
             (n.x, n.y, n.z), list(offsets), nu=nu, nv=nv,
         )
-        out = []
-        for chains in batches:
-            curves = []
-            for points, uvs in chains:
-                vecs = [Vec(*p) for p in points]
-                try:
-                    curve = _Curve.from_points(vecs)
-                except RuntimeError:
-                    curve = _Curve.from_points(vecs, degree=1)
-                curves.append(CurveOnSurface(curve=curve, uv=list(uvs), surface=self))
-            out.append(curves)
-        return out
+        return [[entry for entry in _section_curves(self, chains)] for chains in batches]
 
     def to_mesh_dict(
         self,
@@ -1351,6 +1328,36 @@ class CurveOnSurface:
     curve: Any
     uv: List[tuple]
     surface: Any
+
+
+def _section_curves(surface, chains) -> "List[CurveOnSurface]":
+    """Interpolate section chains, end tangents from the track direction.
+
+    The chains' ends carry no curvature information, and a free-end cubic
+    overshoots there -- measured as phantom plane crossings (Runge-style
+    end wiggle) when section curves are re-intersected. Clamping the ends
+    to the track direction removes it structurally; collinear runs still
+    fall back to degree 1.
+    """
+    from geometrykit.geometry.curve import Curve as _Curve
+
+    out = []
+    for points, uvs in chains:
+        vecs = [Vec(*p) for p in points]
+        kwargs: dict = {}
+        if len(vecs) >= 3:
+            lead = vecs[1] - vecs[0]
+            trail = vecs[-1] - vecs[-2]
+            if abs(lead) > 1e-12 and abs(trail) > 1e-12:
+                kwargs = {"tan_start": lead, "tan_end": trail}
+        try:
+            curve = _Curve.from_points(vecs, **kwargs)
+        except RuntimeError:
+            # collinear (or otherwise degenerate) runs make the cubic
+            # system singular; a degree-1 run through them is exact
+            curve = _Curve.from_points(vecs, degree=1)
+        out.append(CurveOnSurface(curve=curve, uv=list(uvs), surface=surface))
+    return out
 
 
 def occ_intersect_plane(surf: Surface, plane: "Plane") -> List["Curve"]:

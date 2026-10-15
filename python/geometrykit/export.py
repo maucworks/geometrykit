@@ -183,6 +183,12 @@ class _StepFile:
         Path(path).write_text(self.text("geometrykit patch export"))
 
 
+def _xyz_of(point) -> tuple:
+    if hasattr(point, "x"):
+        return (point.x, point.y, point.z)
+    return (point[0], point[1], point[2])
+
+
 def _step_point(step: _StepFile, point) -> int:
     x, y, z = (repr(float(c)) for c in point)
     return step.add(f"CARTESIAN_POINT('',({x},{y},{z}))")
@@ -335,6 +341,8 @@ def write_step_geometry(
     surface_labels=None,
     curves=(),
     curve_labels=None,
+    points=(),
+    point_labels=None,
 ) -> str:
     """Write NURBS surfaces and curves to an AP214 STEP file.
 
@@ -357,6 +365,8 @@ def write_step_geometry(
         curves:          list of `Curve` (edge curves travel with the patches
             they bound).
         curve_labels:    names, one per curve.
+        points:          list of `Vec` (or xyz triples) --e.g. diagrid nodes.
+        point_labels:    names, one per point.
 
     Rational weights are rejected rather than silently dropped -- the
     exchange needs weighted poles.
@@ -366,12 +376,16 @@ def write_step_geometry(
     """
     surfaces = list(surfaces)
     curves = list(curves)
+    points = list(points)
     labels = list(surface_labels or [f"Surface_{i}" for i in range(len(surfaces))])
     curve_labels = list(curve_labels or [f"Curve_{i}" for i in range(len(curves))])
+    point_labels = list(point_labels or [f"Point_{i}" for i in range(len(points))])
     if len(labels) != len(surfaces):
         raise ValueError("one label per surface is required")
     if len(curve_labels) != len(curves):
         raise ValueError("one label per curve is required")
+    if len(point_labels) != len(points):
+        raise ValueError("one label per point is required")
     for item, label in list(zip(surfaces, labels)) + list(zip(curves, curve_labels)):
         if getattr(item, "rational", False):
             raise ValueError(
@@ -432,6 +446,12 @@ def write_step_geometry(
             f"GEOMETRIC_CURVE_SET('edges',({','.join('#' + str(c) for c in curve_ids)}))"
         )
         items.append(f"#{curve_set}")
+    if points:
+        point_ids = [_step_point(step, _xyz_of(p)) for p in points]
+        node_set = step.add(
+            f"GEOMETRIC_CURVE_SET('nodes',({','.join('#' + str(c) for c in point_ids)}))"
+        )
+        items.append(f"#{node_set}")
     rep = step.add(
         f"MANIFOLD_SURFACE_SHAPE_REPRESENTATION('geometrykit_geometry',"
         f"({','.join(items)}),#{geom_context})"

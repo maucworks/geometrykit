@@ -674,3 +674,54 @@ class TestAssemblePath:
 
 # Removed tests for assemble_path_planar (removed functionality)
 # The new assemble_path handles arc reversal via Arc.reverse() internally
+
+
+# ---------------------------------------------------------------------------
+# Curve.plane_roots (no OCC)
+# ---------------------------------------------------------------------------
+
+
+class TestPlaneRoots:
+    """Sign brackets bisected to machine precision; grazes unreported."""
+
+    def test_straight_crossing_is_exact(self):
+        from geometrykit.geometry import Curve
+
+        line = Curve.from_tangents(
+            start=Vec(0, 0, 0), tan_start=Vec(1, 0, 0),
+            end=Vec(4, 0, 0), tan_end=Vec(1, 0, 0), scale=1.0,
+        )
+        roots = line.plane_roots(Vec(1, 0, 0), Vec(1, 0, 0))
+        assert len(roots) == 1
+        assert abs(line.point_at(roots[0]).x - 1.0) < 1e-9
+
+    def test_miss_returns_empty(self):
+        from geometrykit.geometry import Curve
+
+        line = Curve.from_tangents(
+            start=Vec(0, 0, 0), tan_start=Vec(1, 0, 0),
+            end=Vec(4, 0, 0), tan_end=Vec(1, 0, 0), scale=1.0,
+        )
+        assert line.plane_roots(Vec(10, 0, 0), Vec(1, 0, 0)) == []
+
+    def test_two_crossings_both_found(self):
+        from geometrykit.geometry import Curve
+
+        arch = Curve.from_tangents(
+            start=Vec(0, 0, 0), tan_start=Vec(1, 2, 0),
+            end=Vec(4, 0, 0), tan_end=Vec(1, -2, 0), scale=1.0,
+        )
+        roots = arch.plane_roots(Vec(0, 0.25, 0), Vec(0, 1, 0))
+        assert len(roots) == 2
+        for t in roots:
+            assert abs(arch.point_at(t).y - 0.25) < 1e-9, t
+
+    def test_ascending_unique(self):
+        from geometrykit.geometry import Curve
+
+        line = Curve.from_tangents(
+            start=Vec(0, 0, 0), tan_start=Vec(1, 0, 0),
+            end=Vec(4, 0, 0), tan_end=Vec(1, 0, 0), scale=1.0,
+        )
+        roots = line.plane_roots(Vec(2, 0, 0), Vec(1, 0, 0))
+        assert roots == sorted(roots) and len(set(roots)) == len(roots)
