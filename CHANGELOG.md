@@ -53,6 +53,16 @@
   configs: plain 677/0 x2, oracle 677/0. Timing, shipped front patch:
   0.682 s routed vs 0.750 s mirror (the cutover gain doubled with the
   batched rows).
+- **Diagrid capability suite** (`tests/geometry/test_diagrid_capability.py`):
+  the shipped pcurve-diagrid workflow as a committed gate on the
+  flowing-roof network -- energy fill, two diagonal plane families at
+  50 batch levels, weave (48+48 curves, 1128 nodes), unit-length
+  normal spikes at every node, node-plane residuals vs. both families
+  (worst 3.4e-05, measured), two-level refined node-on-curve probe
+  (worst 1.2e-03, measured) with the sampling-resolution trap
+  documented, engine-config determinism of the node set, and a
+  wall-clock budget (< 8 s; shipped measurement ~1.5-2 s). Plain
+  kernels only: no OCC, no numpy.
 
 - **Energy-minimising plate fill** (`patch_np.discrete_plate_fill`,
   `linalg_np.plate_fill`): the interior is the thin-plate solution through
