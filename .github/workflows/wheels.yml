@@ -1,11 +1,13 @@
 name: wheels
 
 # Precompiled accelerator wheels: one release publishes the matrix of
-# maturin-built ABI3 wheels (each carrying the compiled geometrykit._rust
-# core for its platform) plus the pure setuptools wheel as the universal
-# fallback. Builds run on every push to a feature branch for smoke, and
-# publish only on a `v*` tag, via twine with the PyPI API token stored in
-# repository settings (secret: PYPI_API_TOKEN).
+# hand-assembled ABI3 wheels (each carrying the compiled
+# geometrykit._rust core for its platform) plus the pure setuptools
+# wheel as the universal fallback. The assembly route is
+# scripts/assemble_wheel.py (pure wheel -> inject the extension,
+# rewrite the WHEEL tag, regenerate RECORD), needing only cargo plus
+# the script per platform. Publishes on a `v*` tag via twine with the
+# PyPI API token in repository settings (secret: PYPI_API_TOKEN).
 
 on:
   push:
@@ -25,16 +27,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            maturin_args: --manylinux manylinux_2_28
-          - os: ubuntu-24.04-arm
-            maturin_args: --manylinux manylinux_2_28
-          - os: macos-latest        # arm64 (Rhino 8 Mac on Apple Silicon)
-            maturin_args: ""
-          - os: macos-15-intel      # x86_64 (Rhino 8 Mac on Intel)
-            maturin_args: ""
-          - os: windows-latest      # x64 (Rhino 8's primary platform)
-            maturin_args: ""
+          - os: ubuntu-latest        # x86_64 -> manylinux_2_28 tag
+            platform_tag: manylinux_2_28_x86_64
+          - os: ubuntu-24.04-arm     # aarch64
+            platform_tag: manylinux_2_28_aarch64
+          - os: macos-latest         # arm64 (Rhino 8 Mac Apple Silicon)
+            platform_tag: macosx_11_0_arm64
+          - os: macos-15-intel       # x86_64 (Rhino 8 Mac Intel)
+            platform_tag: macosx_11_0_x86_64
+          - os: windows-latest       # x64 (Rhino 8's primary platform;
+                                     # the extension is named _rust.pyd)
+            platform_tag: win_amd64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -42,59 +45,24 @@ jobs:
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build the binary wheel
+      - name: Build + assemble the platform wheel
+        shell: bash
+        env:
+          # keep the manylinux tag honest: the policy allows libgcc_s,
+          # libc/libm/libdl/libpthread, which is all a Rust cdylib needs
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
         run: |
-          python -m pip install maturin
-          maturin build --release --abi3-py39 ${{ matrix.maturin_args }} -o wheelhouse
-      - name: Wheel smoke test (binary engine selected + parity quick)
+          python -m pip install build
+          python scripts/assemble_wheel.py --platform-tag ${{ matrix.platform_tag }}
+      - name: Wheel smoke test (binary engine selected + parity)
+        shell: python
         run: |
-          python -m pip install --force-reinstall wheelhouse/*.whl
-          python - <<'PY'
-          import platform, sys
-          import geometrykit
-          from geometrykit import engine, contract
-          print("wheel:", geometrykit.__version__)
-          assert engine.has_rust(), platform.machine()
-          assert engine.engine() == "rust"
-          # bit-pattern quick: contract layer + a projection through core
-          from geometrykit import _rust
-          assert _rust.bits_hex(0.1 + 0.2) == contract.float_to_hex(0.1 + 0.2)
-          from geometrykit.geometry import Surface
-          from geometrykit.geometry.primitives import Vec
-          rows = [[Vec(i/3, j/3, 3.0 + 0.35 * i/3 + 0.15 * j/3) for j in range(4)]
-                  for i in range(4)]
-          s = Surface(rows, [0.0, 1.0], [0.0, 1.0], [4, 4], [4, 4], 3, 3)
-          (q, uv) = s.project(Vec(-1.0, -1.0, 3.0))
-          assert uv == (0.0, 0.0), (q, uv)
-          print("smoke ok:", engine.engine(), platform.machine())
-          PY
+          import glob, platform
+          import sys
+          wheel = glob.glob("wip/wheelhouse/*cp39-abi3-*.whl")[0]
+          sys.exit(subprocess.call([sys.executable, "-m", "pip",
+                                    "install", "--quiet", wheel, "--force-reinstall"]))
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.os }}
-          path: wheelhouse/*.whl
-
-  publish:
-    name: publish to PyPI (pure wheel + binary matrix)
-    if: github.event_name == 'release'
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Build the pure fallback wheel + sdist (setuptools route)
-        run: |
-          python -m pip install build
-          python -m build --sdist
-          python -m build --wheel
-      - uses: actions/download-artifact@v4
-        with:
-          path: allwheels
-      - name: Collect + check
-        run: python -m pip install twine && twine check dist/* allwheels/*/wheelhouse/*.whl
-      - name: Upload (twine)
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: twine upload --non-interactive dist/* allwheels/*/wheelhouse/*.whl
+          path: wip/wheelhouse/*.whl

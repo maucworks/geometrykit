@@ -29,6 +29,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         if: matrix.engine == 'rust'
       - name: Install (editable; engine built via maturin when rust)
+        shell: bash
         run: |
           if [[ "${{ matrix.engine }}" == "rust" ]]; then
             python -m pip install "maturin>=1,<2"
