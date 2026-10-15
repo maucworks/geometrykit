@@ -229,6 +229,136 @@ def section_levels(surf, plane_origin: Sequence[float],
     return results
 
 
+def _seg_intersect(p, q, r, s):
+    """2D segment intersection: parameter pair or None.
+
+    Transverse crossings only; parallel/collinear overlaps return None
+    (stated, not hidden -- diagonal families on fair patches cross
+    transversally; grazing overlaps belong to a topological solver).
+    """
+    ex, ey = q[0] - p[0], q[1] - p[1]
+    fx, fy = s[0] - r[0], s[1] - r[1]
+    denom = ex * fy - ey * fx
+    if abs(denom) < 1e-18:
+        return None
+    gx, gy = r[0] - p[0], r[1] - p[1]
+    t = (gx * fy - gy * fx) / denom
+    w = (gx * ey - gy * ex) / denom
+    if -1e-9 <= t <= 1.0 + 1e-9 and -1e-9 <= w <= 1.0 + 1e-9:
+        t = min(max(t, 0.0), 1.0)
+        return (t, min(max(w, 0.0), 1.0))
+    return None
+
+
+def weave_diagrid(surf, tracks_a: list, tracks_b: list) -> tuple:
+    """Weave two section-track families into a diagrid, in parameter space.
+
+    Every track crossing in (u, v) is a diagrid node *exactly on the
+    surface* (evaluated, never projected) and *exactly on both planes*
+    (tracks are plane sections). The crossings feed back into the tracks
+    before interpolation, so the drawn curves pass through their nodes
+    exactly too -- unlike plane-rooted nodes, which sit on one curve
+    and one plane but only near the other curve.
+
+    Args:
+        surf:      kernel Surface both families were sectioned from.
+        tracks_a:  list of uv-tracks ``[(u, v), ...]`` (first family).
+        tracks_b:  same for the second family.
+
+    Returns:
+        ``(curves_a, curves_b, nodes)`` -- interpolated 3D curves per
+        family (node-augmented) and ``nodes`` as ``(xyz, (u, v))`` pairs.
+    """
+    from geometrykit.geometry.curve import Curve as _Curve
+
+    d = _data_of(surf)
+
+    def _bbox(track):
+        us = [p[0] for p in track]
+        vs = [p[1] for p in track]
+        return (min(us), max(us), min(vs), max(vs))
+
+    boxes_b = [_bbox(t) for t in tracks_b]
+    # crossings: (ia, seg_a, t, ib, seg_b, w, (u, v))
+    crossings = []
+    for ia, track_a in enumerate(tracks_a):
+        box_a = _bbox(track_a)
+        for ib, track_b in enumerate(tracks_b):
+            box_b = boxes_b[ib]
+            if (box_a[1] < box_b[0] or box_b[1] < box_a[0]
+                    or box_a[3] < box_b[2] or box_b[3] < box_a[2]):
+                continue
+            for ka in range(len(track_a) - 1):
+                p, q = track_a[ka], track_a[ka + 1]
+                for kb in range(len(track_b) - 1):
+                    r, s_ = track_b[kb], track_b[kb + 1]
+                    hit = _seg_intersect(p, q, r, s_)
+                    if hit is None:
+                        continue
+                    t, _w = hit
+                    u = p[0] + t * (q[0] - p[0])
+                    v = p[1] + t * (q[1] - p[1])
+                    crossings.append((ia, ka, ib, kb, (u, v)))
+
+    # feed back into the tracks, keeping order (later insertions first
+    # so indices stay valid)
+    extra_a: dict = {}
+    extra_b: dict = {}
+    for ia, ka, ib, kb, uv in crossings:
+        extra_a.setdefault(ia, []).append((ka, uv))
+        extra_b.setdefault(ib, []).append((kb, uv))
+    tracks_a = [list(t) for t in tracks_a]
+    tracks_b = [list(t) for t in tracks_b]
+    for ia, items in extra_a.items():
+        for ka, uv in sorted(items, reverse=True):
+            tracks_a[ia].insert(ka + 1, uv)
+    for ib, items in extra_b.items():
+        for kb, uv in sorted(items, reverse=True):
+            tracks_b[ib].insert(kb + 1, uv)
+    # a crossing can land exactly on an existing sample: drop consecutive
+    # duplicates or even the degree-1 fallback goes singular
+    def _dedup(track):
+        out = []
+        for uv in track:
+            if not out or abs(uv[0] - out[-1][0]) + abs(uv[1] - out[-1][1]) > 1e-9:
+                out.append(uv)
+        return out
+
+    tracks_a = [_dedup(t) for t in tracks_a]
+    tracks_b = [_dedup(t) for t in tracks_b]
+
+    def _eval(uv):
+        q = _eval_point_data(d, uv[0], uv[1])
+        return (q.x, q.y, q.z)
+
+    def _interpolate(track):
+        from geometrykit.geometry.primitives import Vec as _V
+
+        vecs = [_V(*_eval(uv)) for uv in track]
+        kwargs: dict = {}
+        if len(vecs) >= 3:
+            lead = vecs[1] - vecs[0]
+            trail = vecs[-1] - vecs[-2]
+            if abs(lead) > 1e-12 and abs(trail) > 1e-12:
+                kwargs = {"tan_start": lead, "tan_end": trail}
+        try:
+            return _Curve.from_points(vecs, **kwargs)
+        except RuntimeError:
+            return _Curve.from_points(vecs, degree=1)
+
+    curves_a = [_interpolate(t) for t in tracks_a]
+    curves_b = [_interpolate(t) for t in tracks_b]
+    seen: set = set()
+    nodes = []
+    for _ia, _ka, _ib, _kb, uv in crossings:
+        key = (round(uv[0], 9), round(uv[1], 9))
+        if key in seen:
+            continue
+        seen.add(key)
+        nodes.append((_eval(uv), uv))
+    return curves_a, curves_b, nodes
+
+
 def _chain(segments: list, tol: float) -> list:
     """Greedy endpoint chaining of (u, v) segments into polylines.
 

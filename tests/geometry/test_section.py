@@ -196,3 +196,90 @@ class TestSectionLevels:
         base = Plane(origin=Vec(0, 0, 0), x_axis=Vec(1, 0, 0), y_axis=Vec(0, 0, -1))
         batches = field.section_levels(base, [50.0])
         assert batches == [[]]
+
+
+class TestWeaveDiagrid:
+    """Track crossings in (u, v): nodes exact on surface and curves."""
+
+    @staticmethod
+    def _tracks():
+        # two diagonal families across the unit square, hand-made tracks
+        family_a = [[(t, t * 0.5 + c) for t in _frange(0.0, 1.0, 9)] for c in (0.1, 0.4, 0.7)]
+        family_b = [[(t, -t * 0.5 + c) for t in _frange(0.0, 1.0, 9)] for c in (0.4, 0.7, 1.0)]
+        return family_a, family_b
+
+    def test_crossings_found_and_on_surface(self):
+        from geometrykit.runtimes._npu import section_np
+
+        plane = _flat_plane()
+        family_a, family_b = self._tracks()
+        curves_a, curves_b, nodes = section_np.weave_diagrid(plane, family_a, family_b)
+        assert len(curves_a) == 3 and len(curves_b) == 3
+        assert len(nodes) >= 1
+        for (x, y, z), (u, v) in nodes:
+            q = plane.point_at(u, v)
+            assert abs(q.x - x) + abs(q.y - y) + abs(q.z - z) < 1e-9, ((x, y, z), (u, v))
+
+    def test_nodes_lie_on_their_curves(self):
+        from geometrykit.runtimes._npu import section_np
+
+        plane = _flat_plane()
+        family_a, family_b = self._tracks()
+        curves_a, curves_b, nodes = section_np.weave_diagrid(plane, family_a, family_b)
+        drawn = list(curves_a) + list(curves_b)
+        for (x, y, z), _uv in nodes:
+            best = 1e9
+            for curve in drawn:
+                for i in range(101):
+                    p = curve.point_at(i / 100)
+                    best = min(best, abs(p.x - x) + abs(p.y - y) + abs(p.z - z))
+            assert best < 1e-6, ((x, y, z), best)
+
+
+def _frange(lo: float, hi: float, n: int) -> list:
+    return [lo + (hi - lo) * k / (n - 1) for k in range(n)]
+
+
+class TestWeaveOnRoofFill:
+    """Full diagrid on the fill: count, surface-exactness, curve agreement.
+
+    Needs neither OCC nor numpy: hand tracks woven over a plate fill.
+    """
+
+    @staticmethod
+    def _weave():
+        from geometrykit.runtimes._npu import patch_np, section_np
+
+        curves = _network()
+        fill, _c = patch_np.discrete_plate_fill(
+            curves, nu=12, nv=12, parametrization="arclength"
+        )
+        tracks_a = [
+            [(i / 16, i / 16 * 0.5 + 0.1 + 0.15 * k) for i in range(17)]
+            for k in range(3)
+        ]
+        tracks_b = [
+            [(i / 16, i / 16 * -0.5 + 0.9 - 0.15 * k) for i in range(17)]
+            for k in range(3)
+        ]
+        return fill, section_np.weave_diagrid(fill, tracks_a, tracks_b)
+
+    def test_nodes_exact_on_surface(self):
+        fill, (_ca, _cb, nodes) = self._weave()
+        assert len(nodes) >= 1
+        for (x, y, z), (u, v) in nodes:
+            q = fill.point_at(u, v)
+            assert abs(q.x - x) + abs(q.y - y) + abs(q.z - z) < 1e-9
+
+    def test_nodes_near_drawn_curves(self):
+        _fill, (curves_a, curves_b, nodes) = self._weave()
+        drawn = list(curves_a) + list(curves_b)
+        for (x, y, z), _uv in nodes:
+            best = 1e9
+            for curve in drawn:
+                for i in range(501):
+                    p = curve.point_at(i / 500)
+                    best = min(best, abs(p.x - x) + abs(p.y - y) + abs(p.z - z))
+            # sampling-resolution bound (interpolation itself is exact
+            # to 1e-11 at the knot params -- see TestDenseInterpolation)
+            assert best < 2e-2, ((x, y, z), best)

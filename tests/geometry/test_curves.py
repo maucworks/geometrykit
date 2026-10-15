@@ -725,3 +725,30 @@ class TestPlaneRoots:
         )
         roots = line.plane_roots(Vec(2, 0, 0), Vec(1, 0, 0))
         assert roots == sorted(roots) and len(set(roots)) == len(roots)
+
+
+class TestDenseInterpolationExactness:
+    """from_points passes through its inputs (checked AT the knot params,
+    not by nearest-sample, which only measures sampling resolution)."""
+
+    def test_fifty_points_interpolate_to_1e_9(self):
+        import math
+
+        from geometrykit.geometry import Curve
+
+        pts = [Vec(i * 0.2, math.sin(i * 0.5), 0.0) for i in range(50)]
+        chords = [0.0]
+        for a, b in zip(pts, pts[1:]):
+            chords.append(
+                chords[-1] + abs(b.x - a.x) + abs(b.y - a.y) + abs(b.z - a.z)
+            )
+        total = chords[-1]
+        params = [c / total for c in chords]
+        curve = Curve.from_points(pts, knots=params)
+        worst = 0.0
+        for k, p in enumerate(pts):
+            q = curve.point_at(params[k])
+            worst = max(
+                worst, abs(q.x - p.x) + abs(q.y - p.y) + abs(q.z - p.z)
+            )
+        assert worst < 1e-9, worst
