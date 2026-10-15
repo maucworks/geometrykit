@@ -113,7 +113,20 @@ def _step_knot_list(knots, mults):
             f"knot list ({len(values)}) and multiplicity list "
             f"({len(list(mults))}) must have one entry per distinct knot"
         )
-    return ",".join(repr(float(value)) for value in values)
+    return ",".join(_step_real(value) for value in values)
+
+
+def _step_real(value) -> str:
+    """Part-21 REAL text: a decimal point is mandatory.
+
+    Python's repr drops the point for exponent-form magnitudes (`1e-06`),
+    which the STEP scanner rejects as syntax. Scientific form here always
+    carries one (`1.0000000000000000E-06`).
+    """
+    text = repr(float(value))
+    if "." not in text:
+        text = f"{float(value):.16E}"
+    return text
 
 
 def _step_mult_list(mults) -> str:
@@ -190,7 +203,7 @@ def _xyz_of(point) -> tuple:
 
 
 def _step_point(step: _StepFile, point) -> int:
-    x, y, z = (repr(float(c)) for c in point)
+    x, y, z = (_step_real(c) for c in point)
     return step.add(f"CARTESIAN_POINT('',({x},{y},{z}))")
 
 
@@ -204,7 +217,7 @@ def _step_curve(step: _StepFile, cps, degree, knots, mults, label) -> int:
 
 
 def _step_point2d(step: _StepFile, x: float, y: float) -> int:
-    return step.add(f"CARTESIAN_POINT('',({repr(float(x))},{repr(float(y))}))")
+    return step.add(f"CARTESIAN_POINT('',({_step_real(x)},{_step_real(y)}))")
 
 
 def _step_axis(step: _StepFile, label: str = "") -> int:
@@ -234,7 +247,7 @@ def _step_edge(step, label, curve, param_origin, param_dir, context, surface_id)
     definitional representation follow the shape OCCT itself writes.
     """
     origin = _step_point2d(step, param_origin[0], param_origin[1])
-    direction = step.add(f"DIRECTION('',({repr(float(param_dir[0]))},{repr(float(param_dir[1]))}))")
+    direction = step.add(f"DIRECTION('',({_step_real(param_dir[0])},{_step_real(param_dir[1])}))")
     vector = step.add(f"VECTOR('',#{direction},1.)")
     line = step.add(f"LINE('',#{origin},#{vector})")
     representation = step.add(

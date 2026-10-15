@@ -193,12 +193,11 @@ class TestStepExport:
     @pytest.mark.skipif(not _occ_available(), reason="needs pythonocc to read STEP back")
     def test_occ_reads_the_edge_curves_back(self, tmp_path):
         """The edge curves arrive as B-splines with the kernel's own endpoints."""
+        from geometrykit.export import write_step_geometry
         from OCC.Core.BRep import BRep_Tool
         from OCC.Core.Geom import Geom_BSplineCurve
         from OCC.Core.TopAbs import TopAbs_EDGE
         from OCC.Core.TopExp import TopExp_Explorer
-
-        from geometrykit.export import write_step_geometry
 
         edges = _make_edges()
         out = tmp_path / "curves.step"
@@ -291,7 +290,6 @@ class TestStepExport:
         """The face is bounded by the surface's own four boundary curves."""
         from geometrykit.export import write_step_surfaces
         from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
-        from OCC.Core.STEPControl import STEPControl_Reader
         from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE
         from OCC.Core.TopExp import TopExp_Explorer
 
@@ -316,3 +314,29 @@ class TestStepExport:
         assert abs(corner.X() * MM_PER_M - mine.x) < 1e-9
         assert abs(corner.Y() * MM_PER_M - mine.y) < 1e-9
         assert abs(corner.Z() * MM_PER_M - mine.z) < 1e-9
+
+class TestStepRealFormatting:
+    """Part-21 REALs need a decimal point; repr drops it in exponent form."""
+
+    def test_dotless_exponents_get_a_point(self):
+        from geometrykit.export import _step_real
+
+        for value in (1e-06, 2e-06, 1e16, 0.0, 1.5, -0.038):
+            text = _step_real(value)
+            assert "." in text, (value, text)
+            assert float(text) == float(value)
+
+    def test_exported_text_has_no_dotless_reals(self):
+        import re
+
+        from geometrykit.export import write_step_geometry
+        from geometrykit.geometry.curve import Curve
+        from geometrykit.geometry.primitives import Vec
+
+        curve = Curve.from_points([Vec(0, 0, 0), Vec(1e-06, 2e-06, 3e-05)], degree=1)
+        text = write_step_geometry(
+            "/tmp/tiny.step", curves=[curve], curve_labels=["T"],
+            points=[Vec(1e-06, 0.0, 0.0)], point_labels=["P"],
+        )
+        bad = re.findall(r"[(,]-?\d+e[+-]?\d+", text)
+        assert bad == [], bad
