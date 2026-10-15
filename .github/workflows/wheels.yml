@@ -61,8 +61,10 @@ jobs:
           import subprocess
           import sys
           wheel = glob.glob("wip/wheelhouse/*cp39-abi3-*.whl")[0]
-          sys.exit(subprocess.call([sys.executable, "-m", "pip",
-                                    "install", "--quiet", wheel, "--force-reinstall"]))
+          subprocess.check_call([sys.executable, "-m", "pip",
+                                 "install", "--quiet", wheel, "--force-reinstall"])
+          subprocess.check_call([sys.executable, "-c",
+                                 "import geometrykit.engine as e; print(e.engine())"])
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.os }}
