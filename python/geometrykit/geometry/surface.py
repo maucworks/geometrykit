@@ -202,11 +202,29 @@ class Surface:
         """Closest surface point to ``pt``: ``(proj, (u, v))`` (kernel Newton).
 
         ``occ_project_point`` remains available as the OCCT oracle for tests.
+
+        Results memoize per instance on the rounded query (projection is a
+        deterministic function of the net; solvers here build new surfaces
+        rather than mutating nets, so the cache cannot go stale within a
+        build -- repeated field reads at one spine station hit it).
         """
         from geometrykit.runtimes._npu import surface_np
 
-        p, uv = surface_np.project_point(self, pt, m=m, n=n, iters=iters)
-        return Vec(p.x, p.y, p.z), uv
+        cache = getattr(self, "_project_cache", None)
+        if cache is None:
+            cache = {}
+            try:
+                self._project_cache = cache
+            except AttributeError:
+                pass
+        key = (round(pt.x, 9), round(pt.y, 9), round(pt.z, 9))
+        hit = cache.get(key)
+        if hit is None:
+            p, uv = surface_np.project_point(self, pt, m=m, n=n, iters=iters)
+            hit = (Vec(p.x, p.y, p.z), uv)
+            if len(cache) < 65536:
+                cache[key] = hit
+        return hit
 
     def to_mesh_dict(
         self,

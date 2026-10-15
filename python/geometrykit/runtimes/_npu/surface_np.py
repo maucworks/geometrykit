@@ -156,6 +156,24 @@ class _Data:
         return self.weights[i][j]
 
 
+def _data_of(surf) -> _Data:
+    """The prepared payload, cached on the surface.
+
+    Knot expansion is pure overhead per evaluation; surfaces are treated
+    as values in this codebase (solvers build new ones), so caching on
+    identity is safe. Mutating `control_points` in place bypasses it --
+    don't.
+    """
+    cached = getattr(surf, "_npu_data", None)
+    if cached is None:
+        cached = _Data(surf)
+        try:
+            surf._npu_data = cached
+        except AttributeError:
+            pass
+    return cached
+
+
 def _accumulate(d: _Data, Nu: dict, Nv: dict):
     """Homogeneous point ⊕ weight sum for the given basis slices."""
     hpt = [0.0, 0.0, 0.0]
@@ -174,24 +192,11 @@ def _accumulate(d: _Data, Nu: dict, Nv: dict):
 
 def eval_point(surf, u: float, v: float) -> Vec3:
     """Evaluate the surface point at ``(u, v)`` (rational-safe homogeneous divide)."""
-    d = _Data(surf)
-    u, v = d.clamp(u, v)
-    Nu = _nonzero_row(u, d.pu, d.uflat)
-    Nv = _nonzero_row(v, d.pv, d.vflat)
-    hpt, wsum = _accumulate(d, Nu, Nv)
-    if wsum == 0.0:
-        raise ZeroDivisionError("surface weights sum to zero at (u, v)")
-    return Vec3(hpt[0] / wsum, hpt[1] / wsum, hpt[2] / wsum)
+    return _eval_point_data(_data_of(surf), u, v)
 
 
-def eval_tangents(surf, u: float, v: float) -> tuple:
-    """Analytic first-order derivatives ``(∂S/∂u, ∂S/∂v)`` at ``(u, v)``.
-
-    Homogeneous accumulation + quotient rule:
-    ``∂S = (∂H − ∂W·S) / W`` — identical for rational and non-rational
-    (non-rational collapses to constant W).
-    """
-    d = _Data(surf)
+def _eval_all_data(d: _Data, u: float, v: float) -> tuple:
+    """Point + both tangents from a single basis build (prepared payload)."""
     u, v = d.clamp(u, v)
     Nu, dNu = _basis_and_deriv(u, d.pu, d.uflat)
     Nv, dNv = _basis_and_deriv(v, d.pv, d.vflat)
@@ -199,7 +204,7 @@ def eval_tangents(surf, u: float, v: float) -> tuple:
     hpt, wsum = _accumulate(d, Nu, Nv)
     if wsum == 0.0:
         raise ZeroDivisionError("surface weights sum to zero at (u, v)")
-    pt = (hpt[0] / wsum, hpt[1] / wsum, hpt[2] / wsum)
+    px, py, pz = hpt[0] / wsum, hpt[1] / wsum, hpt[2] / wsum
 
     d_ho = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
     d_w = [0.0, 0.0]
@@ -218,16 +223,49 @@ def eval_tangents(surf, u: float, v: float) -> tuple:
             d_ho[1][1] += ni * dNv_j * wij * c.y
             d_ho[1][2] += ni * dNv_j * wij * c.z
             d_w[1] += ni * dNv_j * wij
-    su = Vec3(
-        (d_ho[0][0] - d_w[0] * pt[0]) / wsum,
-        (d_ho[0][1] - d_w[0] * pt[1]) / wsum,
-        (d_ho[0][2] - d_w[0] * pt[2]) / wsum,
+    return (
+        Vec3(px, py, pz),
+        Vec3(
+            (d_ho[0][0] - d_w[0] * px) / wsum,
+            (d_ho[0][1] - d_w[0] * py) / wsum,
+            (d_ho[0][2] - d_w[0] * pz) / wsum,
+        ),
+        Vec3(
+            (d_ho[1][0] - d_w[1] * px) / wsum,
+            (d_ho[1][1] - d_w[1] * py) / wsum,
+            (d_ho[1][2] - d_w[1] * pz) / wsum,
+        ),
     )
-    sv = Vec3(
-        (d_ho[1][0] - d_w[1] * pt[0]) / wsum,
-        (d_ho[1][1] - d_w[1] * pt[1]) / wsum,
-        (d_ho[1][2] - d_w[1] * pt[2]) / wsum,
-    )
+
+
+def eval_all(surf, u: float, v: float) -> tuple:
+    """Point + both analytic tangents at ``(u, v)``, one basis build.
+
+    The combined kernel behind the hot paths (projection, row assembly):
+    one `_Data` lookup and one basis evaluation instead of three.
+    """
+    return _eval_all_data(_data_of(surf), u, v)
+
+
+def _eval_point_data(d: _Data, u: float, v: float) -> Vec3:
+    """Point-only evaluation on a prepared payload (the coarse-pass kernel)."""
+    u, v = d.clamp(u, v)
+    Nu = _nonzero_row(u, d.pu, d.uflat)
+    Nv = _nonzero_row(v, d.pv, d.vflat)
+    hpt, wsum = _accumulate(d, Nu, Nv)
+    if wsum == 0.0:
+        raise ZeroDivisionError("surface weights sum to zero at (u, v)")
+    return Vec3(hpt[0] / wsum, hpt[1] / wsum, hpt[2] / wsum)
+
+
+def eval_tangents(surf, u: float, v: float) -> tuple:
+    """Analytic first-order derivatives ``(∂S/∂u, ∂S/∂v)`` at ``(u, v)``.
+
+    Homogeneous accumulation + quotient rule:
+    ``∂S = (∂H − ∂W·S) / W`` — identical for rational and non-rational
+    (non-rational collapses to constant W).
+    """
+    _pt, su, sv = _eval_all_data(_data_of(surf), u, v)
     return su, sv
 
 
@@ -244,39 +282,129 @@ def eval_normal(surf, u: float, v: float) -> Vec3:
 def project_point(surf, pt, m: int = 6, n: int = 6, iters: int = 40):
     """Nearest surface point to ``pt``: ``(proj, (u, v))`` (no OCC calls).
 
-    Multi-start Gauss–Newton on the squared-distance objective in the
-    (u, v) domain, seeded from a coarse grid and domain-clamped.
+    Coarse grid (point evaluations only) seeds a few damped Gauss-Newton
+    runs on the orthogonality equations, then each boundary isocurve is
+    checked by golden-section -- the global nearest point may lie on the
+    boundary when the query is outside the footprint, which domain
+    clamping alone does not find.
     """
-    d = _Data(surf)
+    d = _data_of(surf)
     u0, u1 = d.uflat[d.pu], d.uflat[-d.pu - 1]
     v0, v1 = d.vflat[d.pv], d.vflat[-d.pv - 1]
-    domain = 10.0 * ((u1 - u0) + (v1 - v0))
-    best: tuple | None = None
+
+    def _dist2(q) -> float:
+        return (q.x - pt.x) ** 2 + (q.y - pt.y) ** 2 + (q.z - pt.z) ** 2
+
+    # -- coarse pass: point evaluations only, keep the best few cells -----
+    coarse = []
     for i in range(m + 1):
         for j in range(n + 1):
             uu = u0 + (u1 - u0) * i / m
             vv = v0 + (v1 - v0) * j / n
-            for _ in range(iters):
-                q = eval_point(surf, uu, vv)
-                su, sv = eval_tangents(surf, uu, vv)
-                rx, ry, rz = q.x - pt.x, q.y - pt.y, q.z - pt.z
-                gu = rx * su.x + ry * su.y + rz * su.z
-                gv = rx * sv.x + ry * sv.y + rz * sv.z
-                suu = su.x * su.x + su.y * su.y + su.z * su.z
-                svv = sv.x * sv.x + sv.y * sv.y + sv.z * sv.z
-                suv = su.x * sv.x + su.y * sv.y + su.z * sv.z
-                det = suu * svv - suv * suv
-                if abs(det) < 1e-20:
-                    break
-                du = -(gu * svv - gv * suv) / det
-                dv = -(gv * suu - gu * suv) / det
-                if abs(du) + abs(dv) > domain:
-                    du *= 0.5
-                    dv *= 0.5
-                uu = min(max(uu + du, u0), u1)
-                vv = min(max(vv + dv, v0), v1)
-            q = eval_point(surf, uu, vv)
-            dist = (q.x - pt.x) ** 2 + (q.y - pt.y) ** 2 + (q.z - pt.z) ** 2
-            if best is None or dist < best[0]:
-                best = (dist, q, (uu, vv))
+            coarse.append((_dist2(_eval_point_data(d, uu, vv)), uu, vv))
+    coarse.sort(key=lambda entry: entry[0])
+    seeds: list = []
+    for dist, uu, vv in coarse:
+        if all(abs(uu - s_u) + abs(vv - s_v) > 0.5 * min(
+            (u1 - u0) / max(m, 1), (v1 - v0) / max(n, 1)
+        ) for s_u, s_v in seeds):
+            seeds.append((uu, vv))
+        if len(seeds) >= 3:
+            break
+
+    # -- damped Gauss-Newton on r.Su = r.Sv = 0 -----------------------------
+    best = (coarse[0][0], _eval_point_data(d, coarse[0][1], coarse[0][2]),
+            (coarse[0][1], coarse[0][2]))
+    for uu, vv in seeds:
+        dist, uu, vv = _newton(d, pt, uu, vv, u0, u1, v0, v1,
+                               iters=min(max(iters, 4), 12))
+        if dist < best[0]:
+            best = (dist, _eval_point_data(d, uu, vv), (uu, vv))
+
+    # -- boundary isocurves by golden-section --------------------------------
+    for fixed, lo, hi, along_u in (
+        (u0, v0, v1, False), (u1, v0, v1, False),
+        (v0, u0, u1, True), (v1, u0, u1, True),
+    ):
+        dist, uu, vv = _edge_min(d, pt, fixed, lo, hi, along_u)
+        if dist < best[0]:
+            best = (dist, _eval_point_data(d, uu, vv), (uu, vv))
     return best[1], best[2]
+
+
+def _newton(d: _Data, pt, uu: float, vv: float, u0: float, u1: float,
+            v0: float, v1: float, iters: int) -> tuple:
+    """Damped Gauss-Newton on the orthogonality equations from one seed.
+
+    Returns ``(dist2, u, v)``. Terminates early when the gradient is tiny;
+    halves the step while the residual grows (at most four halvings).
+    """
+    domain = 10.0 * ((u1 - u0) + (v1 - v0))
+    q, su, sv = _eval_all_data(d, uu, vv)
+    dist = (q.x - pt.x) ** 2 + (q.y - pt.y) ** 2 + (q.z - pt.z) ** 2
+    for _ in range(max(iters, 1)):
+        rx, ry, rz = q.x - pt.x, q.y - pt.y, q.z - pt.z
+        gu = rx * su.x + ry * su.y + rz * su.z
+        gv = rx * sv.x + ry * sv.y + rz * sv.z
+        if abs(gu) + abs(gv) < 1e-10:
+            break
+        suu = su.x * su.x + su.y * su.y + su.z * su.z
+        svv = sv.x * sv.x + sv.y * sv.y + sv.z * sv.z
+        suv = su.x * sv.x + su.y * sv.y + su.z * sv.z
+        det = suu * svv - suv * suv
+        if abs(det) < 1e-20:
+            break
+        du = -(gu * svv - gv * suv) / det
+        dv = -(gv * suu - gu * suv) / det
+        if abs(du) + abs(dv) > domain:
+            du *= 0.5
+            dv *= 0.5
+        step, accepted = 1.0, False
+        for _ in range(5):
+            trial_u = min(max(uu + step * du, u0), u1)
+            trial_v = min(max(vv + step * dv, v0), v1)
+            trial = _eval_point_data(d, trial_u, trial_v)
+            trial_dist = ((trial.x - pt.x) ** 2 + (trial.y - pt.y) ** 2
+                          + (trial.z - pt.z) ** 2)
+            if trial_dist <= dist:
+                uu, vv, dist, accepted = trial_u, trial_v, trial_dist, True
+                break
+            step *= 0.5
+        if not accepted:
+            break
+        q, su, sv = _eval_all_data(d, uu, vv)
+    return dist, uu, vv
+
+
+def _edge_min(d: _Data, pt, fixed: float, lo: float, hi: float,
+              along_u: bool) -> tuple:
+    """Golden-section minimum of the distance over one boundary isocurve."""
+    golden = (math.sqrt(5.0) - 1.0) / 2.0
+
+    def _at(t: float) -> tuple:
+        if along_u:
+            return _eval_point_data(d, t, fixed)
+        return _eval_point_data(d, fixed, t)
+
+    def _dist2(t: float) -> float:
+        q = _at(t)
+        return (q.x - pt.x) ** 2 + (q.y - pt.y) ** 2 + (q.z - pt.z) ** 2
+
+    a, b = lo, hi
+    c, e = b - golden * (b - a), a + golden * (b - a)
+    fc, fe = _dist2(c), _dist2(e)
+    for _ in range(24):
+        if fc < fe:
+            b, fe = e, fc
+            e = c
+            c = b - golden * (b - a)
+            fc = _dist2(c)
+        else:
+            a, fc = c, fe
+            c = e
+            e = a + golden * (b - a)
+            fe = _dist2(e)
+    t = 0.5 * (a + b)
+    if along_u:
+        return _dist2(t), t, fixed
+    return _dist2(t), fixed, t

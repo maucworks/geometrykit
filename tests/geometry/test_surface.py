@@ -198,3 +198,88 @@ class TestSerialisation:
         r = Surface.from_dict(d)
         assert r.uclosed is True
         assert r.vclosed is False
+
+
+# ---------------------------------------------------------------------------
+# Projection (P0: coarse grid + damped Newton + boundary fallback)
+# ---------------------------------------------------------------------------
+
+
+def _flat_plane() -> Surface:
+    return Surface(
+        control_points=[
+            [Vec(0, 0, 0), Vec(0, 6, 0)],
+            [Vec(8, 0, 0), Vec(8, 6, 0)],
+        ],
+        uknots=[0.0, 1.0],
+        vknots=[0.0, 1.0],
+        umults=[2, 2],
+        vmults=[2, 2],
+        udegree=1,
+        vdegree=1,
+    )
+
+
+class TestProjectPoint:
+    """Analytic anchors: plane exact, outside finds the boundary."""
+
+    def test_interior_projects_exactly(self):
+        from geometrykit.runtimes._npu import surface_np
+
+        plane = _flat_plane()
+        for pt, want in (
+            (Vec(4, 3, 2.5), (4.0, 3.0, 0.0)),
+            (Vec(0, 0, 1.0), (0.0, 0.0, 0.0)),
+            (Vec(8, 6, 0.5), (8.0, 6.0, 0.0)),
+        ):
+            q, uv = surface_np.project_point(plane, pt)
+            assert max(abs(q.x - want[0]), abs(q.y - want[1]), abs(q.z - want[2])) < 1e-9, (pt, q)
+            assert uv[0] == pytest.approx(want[0] / 8.0)
+            assert uv[1] == pytest.approx(want[1] / 6.0)
+
+    def test_outside_footprint_finds_the_boundary(self):
+        from geometrykit.runtimes._npu import surface_np
+
+        plane = _flat_plane()
+        q, _uv = surface_np.project_point(plane, Vec(10, 3, 1.0))
+        assert max(abs(q.x - 8), abs(q.y - 3), abs(q.z)) < 1e-9, q
+        q, _uv = surface_np.project_point(plane, Vec(4, -2, 0.5))
+        assert max(abs(q.x - 4), abs(q.y), abs(q.z)) < 1e-9, q
+
+    def test_tilted_plane_projects_exactly(self):
+        from geometrykit.runtimes._npu import surface_np
+
+        tilt = Surface(
+            control_points=[
+                [Vec(0, 0, 0), Vec(0, 1, 1)],
+                [Vec(1, 0, 0), Vec(1, 1, 1)],
+            ],
+            uknots=[0.0, 1.0],
+            vknots=[0.0, 1.0],
+            umults=[2, 2],
+            vmults=[2, 2],
+            udegree=1,
+            vdegree=1,
+        )
+        q, _uv = surface_np.project_point(tilt, Vec(0.5, 0.5, 2.0))
+        assert max(abs(q.x - 0.5), abs(q.y - 1.0), abs(q.z - 1.0)) < 1e-9, q
+
+    def test_eval_all_agrees_with_split_kernels(self):
+        from geometrykit.runtimes._npu import surface_np
+
+        plane = _flat_plane()
+        for u, v in ((0.0, 0.0), (0.3, 0.7), (1.0, 1.0)):
+            p, su, sv = surface_np.eval_all(plane, u, v)
+            q = surface_np.eval_point(plane, u, v)
+            tu, tv = surface_np.eval_tangents(plane, u, v)
+            assert (p.x, p.y, p.z) == (q.x, q.y, q.z)
+            assert (su.x, su.y, su.z) == (tu.x, tu.y, tu.z)
+            assert (sv.x, sv.y, sv.z) == (tv.x, tv.y, tv.z)
+
+    def test_surface_project_memoizes(self):
+        plane = _flat_plane()
+        assert getattr(plane, "_project_cache", None) is None
+        plane.project(Vec(4, 3, 2.5))
+        assert len(plane._project_cache) == 1
+        q, _uv = plane.project(Vec(4, 3, 2.5))
+        assert max(abs(q.x - 4), abs(q.y - 3), abs(q.z)) < 1e-9
