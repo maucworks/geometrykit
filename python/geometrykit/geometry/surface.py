@@ -175,25 +175,26 @@ class Surface:
     def point_at(self, u: float, v: float) -> Vec:
         """Evaluate surface point at ``(u, v)`` — both in ``[0, 1]``.
 
-        Pure kernel path (``runtimes/_npu``, M2): no pythonocc needed.
+        Pure kernel path (engine dispatch): mirror or the `_rust`
+        accelerator, bit-identical by harness; no pythonocc needed.
         """
-        from geometrykit.runtimes._npu import surface_np
+        from geometrykit.runtimes import dispatch
 
-        p = surface_np.eval_point(self, u, v)
+        p = dispatch.eval_point(self, u, v)
         return Vec(p.x, p.y, p.z)
 
     def tangents_at(self, u: float, v: float) -> "tuple[Vec, Vec]":
         """Analytic first-order derivatives ``(dS/du, dS/dv)`` at ``(u, v)``."""
-        from geometrykit.runtimes._npu import surface_np
+        from geometrykit.runtimes import dispatch
 
-        su, sv = surface_np.eval_tangents(self, u, v)
+        su, sv = dispatch.eval_tangents(self, u, v)
         return Vec(su.x, su.y, su.z), Vec(sv.x, sv.y, sv.z)
 
     def normal_at(self, u: float, v: float) -> Vec:
         """Unit normal at ``(u, v)`` (cross of the analytic tangents; kernel path)."""
-        from geometrykit.runtimes._npu import surface_np
+        from geometrykit.runtimes import dispatch
 
-        n = surface_np.eval_normal(self, u, v)
+        n = dispatch.eval_normal(self, u, v)
         return Vec(n.x, n.y, n.z)
 
     def project(
@@ -208,8 +209,6 @@ class Surface:
         rather than mutating nets, so the cache cannot go stale within a
         build -- repeated field reads at one spine station hit it).
         """
-        from geometrykit.runtimes._npu import surface_np
-
         cache = getattr(self, "_project_cache", None)
         if cache is None:
             cache = {}
@@ -220,7 +219,9 @@ class Surface:
         key = (round(pt.x, 9), round(pt.y, 9), round(pt.z, 9))
         hit = cache.get(key)
         if hit is None:
-            p, uv = surface_np.project_point(self, pt, m=m, n=n, iters=iters)
+            from geometrykit.runtimes import dispatch
+
+            p, uv = dispatch.project_point(self, pt, m=m, n=n, iters=iters)
             hit = (Vec(p.x, p.y, p.z), uv)
             if len(cache) < 65536:
                 cache[key] = hit

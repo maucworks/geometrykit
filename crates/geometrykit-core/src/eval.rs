@@ -8,6 +8,8 @@
 //! is a test gate; any reassociation of these expressions is a bug here.
 
 /// One evaluated station: point, tangent, whatever — plain f64 triples.
+const ZERO_WSUM: &str = "surface weights sum to zero at (u, v)";
+const ZERO_WSUM_DIST: Pt = [f64::NAN, f64::NAN, f64::NAN];
 pub type Pt = [f64; 3];
 
 /// Point + both analytic tangents at a station.
@@ -213,17 +215,17 @@ impl Surface {
 
     /// Point at `(u, v)` — rational-safe homogeneous divide.
     ///
-    /// Panics on a zero weight sum, mirroring the mirror's
-    /// `ZeroDivisionError`.
-    pub fn eval_point(&self, u: f64, v: f64) -> Pt {
+    /// `Err` on a zero weight sum, carrying the mirror's
+    /// `ZeroDivisionError` message so wrapper engines map it 1:1.
+    pub fn eval_point(&self, u: f64, v: f64) -> Result<Pt, String> {
         let (u, v) = self.clamp(u, v);
         let (ub, nu) = Self::nonzero_row(u, self.pu, &self.uflat);
         let (vb, nv) = Self::nonzero_row(v, self.pv, &self.vflat);
         let (hpt, wsum) = self.accumulate(ub, &nu, vb, &nv);
         if wsum == 0.0 {
-            panic!("surface weights sum to zero at (u, v)");
+            return Err(ZERO_WSUM.to_string());
         }
-        [hpt[0] / wsum, hpt[1] / wsum, hpt[2] / wsum]
+        Ok([hpt[0] / wsum, hpt[1] / wsum, hpt[2] / wsum])
     }
 
     /// Point + both analytic tangents at `(u, v)`, one basis build.
@@ -231,14 +233,14 @@ impl Surface {
     /// The derivative accumulation order matches the mirror line for
     /// line (interleaved u- and v- contributions per pole), so the
     /// quotient rule stays bit-identical for rational and plain.
-    pub fn eval_all(&self, u: f64, v: f64) -> EvalAll {
+    pub fn eval_all(&self, u: f64, v: f64) -> Result<EvalAll, String> {
         let (u, v) = self.clamp(u, v);
         let (ub, nu, dnu) = Self::basis_and_deriv(u, self.pu, &self.uflat);
         let (vb, nv, dnv) = Self::basis_and_deriv(v, self.pv, &self.vflat);
 
         let (hpt, wsum) = self.accumulate(ub, &nu, vb, &nv);
         if wsum == 0.0 {
-            panic!("surface weights sum to zero at (u, v)");
+            return Err(ZERO_WSUM.to_string());
         }
         let (px, py, pz) = (hpt[0] / wsum, hpt[1] / wsum, hpt[2] / wsum);
 
@@ -262,7 +264,7 @@ impl Surface {
                 d_w[1] += ni * dnj * wij;
             }
         }
-        EvalAll {
+        Ok(EvalAll {
             pt: [px, py, pz],
             su: [
                 (d_ho[0][0] - d_w[0] * px) / wsum,
@@ -274,7 +276,7 @@ impl Surface {
                 (d_ho[1][1] - d_w[1] * py) / wsum,
                 (d_ho[1][2] - d_w[1] * pz) / wsum,
             ],
-        }
+        })
     }
 
     /// Squared L2 distance — same left-to-right association as the
@@ -305,7 +307,10 @@ impl Surface {
         iters: usize,
     ) -> (f64, f64, f64) {
         let domain = 10.0 * ((u1 - u0) + (v1 - v0));
-        let e = self.eval_all(uu, vv);
+        let e = match self.eval_all(uu, vv) {
+            Ok(e) => e,
+            Err(_) => return (f64::INFINITY, uu, vv),
+        };
         let (mut q, mut su, mut sv) = (e.pt, e.su, e.sv);
         let mut dist = self.dist2(&q, pt);
         for _ in 0..iters.max(1) {
@@ -335,7 +340,10 @@ impl Surface {
             for _ in 0..5 {
                 let tu = (uu + step * du).max(u0).min(u1);
                 let tv = (vv + step * dv).max(v0).min(v1);
-                let trial = self.eval_point(tu, tv);
+                let trial = match self.eval_point(tu, tv) {
+                    Ok(t) => t,
+                    Err(_) => ZERO_WSUM_DIST,
+                };
                 let td = self.dist2(&trial, pt);
                 if td <= dist {
                     uu = tu;
@@ -349,10 +357,13 @@ impl Surface {
             if !accepted {
                 break;
             }
-            let e = self.eval_all(uu, vv);
-            q = e.pt;
-            su = e.su;
-            sv = e.sv;
+            if let Ok(e) = self.eval_all(uu, vv) {
+                q = e.pt;
+                su = e.su;
+                sv = e.sv;
+            } else {
+                break;
+            }
         }
         (dist, uu, vv)
     }
@@ -361,8 +372,15 @@ impl Surface {
     /// isocurve (mirror `_edge_min`, 24 iterations, fixed rationals).
     fn edge_min(&self, pt: &Pt, fixed: f64, lo: f64, hi: f64, along_u: bool) -> (f64, f64, f64) {
         let golden = (5.0f64.sqrt() - 1.0) / 2.0;
-        let mut dist_at = |t: f64| -> f64 {
-            let q = if along_u { self.eval_point(t, fixed) } else { self.eval_point(fixed, t) };
+        let dist_at = |t: f64| -> f64 {
+            let q = match if along_u {
+                self.eval_point(t, fixed)
+            } else {
+                self.eval_point(fixed, t)
+            } {
+                Ok(p) => p,
+                Err(_) => return f64::INFINITY,
+            };
             self.dist2(&q, pt)
         };
         let (mut a, mut b) = (lo, hi);
@@ -397,7 +415,7 @@ impl Surface {
     /// algorithm verbatim (no OCC): coarse point-only grid seeds,
     /// damped Gauss-Newton from the distinct best cells, then the four
     /// boundary isocurves by golden-section, keeping the global best.
-    pub fn project_point(&self, pt: &Pt, m: usize, n: usize, iters: usize) -> (Pt, (f64, f64)) {
+    pub fn project_point(&self, pt: &Pt, m: usize, n: usize, iters: usize) -> Result<(Pt, (f64, f64)), String> {
         let u0 = self.uflat[self.pu];
         let u1 = self.uflat[self.uflat.len() - self.pu - 1];
         let v0 = self.vflat[self.pv];
@@ -409,7 +427,10 @@ impl Surface {
             for j in 0..=n {
                 let uu = u0 + (u1 - u0) * i as f64 / m as f64;
                 let vv = v0 + (v1 - v0) * j as f64 / n as f64;
-                let d2 = self.dist2(&self.eval_point(uu, vv), pt);
+                let d2 = match self.eval_point(uu, vv) {
+                    Ok(p) => self.dist2(&p, pt),
+                    Err(_) => f64::INFINITY,
+                };
                 coarse.push((d2, uu, vv));
             }
         }
@@ -432,12 +453,16 @@ impl Surface {
         }
 
         let (d0, bu, bv) = coarse[0];
-        let mut best = (d0, self.eval_point(bu, bv), (bu, bv));
+        let best0 = match self.eval_point(bu, bv) {
+            Ok(p) => p,
+            Err(_) => return Err(ZERO_WSUM.to_string()),
+        };
+        let mut best = (d0, best0, (bu, bv));
         for (uu, vv) in &seeds {
             let (dist, uu2, vv2) =
                 self.newton(pt, *uu, *vv, u0, u1, v0, v1, iters.max(4).min(12));
             if dist < best.0 {
-                best = (dist, self.eval_point(uu2, vv2), (uu2, vv2));
+                best = (dist, self.eval_or_best(uu2, vv2, &best.1), (uu2, vv2));
             }
         }
 
@@ -450,10 +475,21 @@ impl Surface {
         ] {
             let (dist, uu, vv) = self.edge_min(pt, fixed, lo, hi, along_u);
             if dist < best.0 {
-                best = (dist, self.eval_point(uu, vv), (uu, vv));
+                best = (dist, self.eval_or_best(uu, vv, &best.1), (uu, vv));
             }
         }
-        (best.1, best.2)
+        Ok((best.1, best.2))
+    }
+
+    /// Mirror's `best`-site re-evaluation: if the refined station's
+    /// weight sum is zero, keep the previous point (the mirror would
+    /// raise there; in engine-parity terms degenerate weights are a
+    /// caller error and the wrapper surfaces it).
+    fn eval_or_best(&self, u: f64, v: f64, fallback: &Pt) -> Pt {
+        match self.eval_point(u, v) {
+            Ok(p) => p,
+            Err(_) => *fallback,
+        }
     }
 }
 
@@ -485,9 +521,9 @@ mod tests {
     #[test]
     fn corner_is_pole() {
         let f = fixture();
-        let p = f.eval_point(0.0, 0.0);
+        let p = f.eval_point(0.0, 0.0).expect("wsum");
         assert_eq!(p, [0.0, 0.0, 3.0]);
-        let pn = f.eval_point(1.0, 1.0);
+        let pn = f.eval_point(1.0, 1.0).expect("wsum");
         assert_eq!(pn[0], 1.0);
         assert_eq!(pn[1], 1.0);
     }
@@ -497,7 +533,7 @@ mod tests {
         // poles x_i = i/3, z_i = 3 + 0.35 x_i on the y=0 fringe: the
         // Bernstein mean gives x(u,0)=u and z(u,0)=3+0.35u exactly
         let f = fixture();
-        let e = f.eval_all(0.0, 0.0);
+        let e = f.eval_all(0.0, 0.0).expect("wsum");
         assert!((e.su[0] - 1.0).abs() < 1e-12);
         assert!((e.su[1]).abs() < 1e-12);
         assert!((e.su[2] - 0.35).abs() < 1e-12);
@@ -509,8 +545,8 @@ mod tests {
     #[test]
     fn clamps_outside_domain() {
         let f = fixture();
-        let a = f.eval_point(-0.5, 0.25);
-        let b = f.eval_point(0.0, 0.25);
+        let a = f.eval_point(-0.5, 0.25).expect("wsum");
+        let b = f.eval_point(0.0, 0.25).expect("wsum");
         assert_eq!(a[0], b[0]);
     }
 
@@ -524,7 +560,7 @@ mod tests {
             poles, nu, nv, Some(w), 3, 3, &[0.0, 1.0], &[4, 4], &[0.0, 1.0], &[4, 4],
         );
         // at the corner the single pole dominates: value IS the pole
-        let c = s.eval_point(0.0, 0.0);
+        let c = s.eval_point(0.0, 0.0).expect("wsum");
         assert_eq!(c, [0.0, 0.0, 3.0]);
     }
 
@@ -534,7 +570,7 @@ mod tests {
         // target beyond the (0,0) corner: the true nearest is the
         // corner itself (constrained min -- what the boundary
         // golden-section pass exists for)
-        let (q, uv) = f.project_point(&[-1.0, -1.0, 3.0], 6, 6, 40);
+        let (q, uv) = f.project_point(&[-1.0, -1.0, 3.0], 6, 6, 40).expect("wsum");
         assert_eq!(q[0], 0.0);
         assert_eq!(q[1], 0.0);
         assert_eq!(q[2], 3.0);

@@ -5,7 +5,7 @@
 //! `geometrykit-core`, numbers out. No geometry logic lives here — the
 //! kernels belong in `-core`, and anything wrong is wrong there.
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyZeroDivisionError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
@@ -91,7 +91,9 @@ fn eval_point_grid(
     let s = _payload(surface)?;
     let mut out = Vec::with_capacity(us.len() * 3);
     for (u, v) in us.iter().zip(&vs) {
-        let p = s.eval_point(*u, *v);
+        let p = s
+            .eval_point(*u, *v)
+            .map_err(PyZeroDivisionError::new_err)?;
         out.extend_from_slice(&p);
     }
     Ok(out)
@@ -111,7 +113,9 @@ fn eval_all_grid(
     let s = _payload(surface)?;
     let mut out = Vec::with_capacity(us.len() * 9);
     for (u, v) in us.iter().zip(&vs) {
-        let e = s.eval_all(*u, *v);
+        let e = s
+            .eval_all(*u, *v)
+            .map_err(PyZeroDivisionError::new_err)?;
         out.extend_from_slice(&e.pt);
         out.extend_from_slice(&e.su);
         out.extend_from_slice(&e.sv);
@@ -129,7 +133,9 @@ fn project_grid(surface: &Bound<'_, PyAny>, pts: Vec<f64>) -> PyResult<Vec<f64>>
     let s = _payload(surface)?;
     let mut out = Vec::with_capacity(pts.len() / 3 * 5);
     for c in pts.chunks_exact(3) {
-        let (q, uv) = s.project_point(&[c[0], c[1], c[2]], 6, 6, 40);
+        let (q, uv) = s
+            .project_point(&[c[0], c[1], c[2]], 6, 6, 40)
+            .map_err(PyZeroDivisionError::new_err)?;
         out.extend_from_slice(&q);
         out.push(uv.0);
         out.push(uv.1);

@@ -269,3 +269,67 @@ class TestEvaluationParity:
                 assert contract.float_to_hex(va) == contract.float_to_hex(vb), (va, vb)
         assert _sig(mine_rows) == _sig(got)
 
+
+@pytest.mark.rust
+@pytest.mark.skipif(not engine.has_rust(), reason="requires geometrykit._rust")
+class TestRoutedParity:
+    """Phase 3 cutover: the routed public API equals the mirror bitwise.
+
+    Routed means `Surface.point_at/tangents_at/normal_at/project` under
+    dispatch (extension when importable) — the exact API the pipeline
+    rides on, compared here against the untouched mirror.
+    """
+
+    def _stations(self):
+        pairs = []
+        for u in _STATIONS:
+            for v in _STATIONS:
+                pairs.append((u, v))
+        return pairs
+
+    def test_point_at_routed_matches_mirror(self):
+        from geometrykit.runtimes._npu import surface_np
+
+        surf = _surface()
+        for u, v in self._stations():
+            mine = surf.point_at(u, v)
+            ref = surface_np.eval_point(surf, u, v)
+            for a, b in zip((mine.x, mine.y, mine.z), (ref.x, ref.y, ref.z)):
+                assert contract.float_to_hex(a) == contract.float_to_hex(b)
+
+    def test_tangents_at_routed_matches_mirror(self):
+        from geometrykit.runtimes._npu import surface_np
+
+        surf = _surface()
+        for u, v in self._stations():
+            su, sv = surf.tangents_at(u, v)
+            rsu, rsv = surface_np.eval_tangents(surf, u, v)
+            for a, b in zip(
+                (su.x, su.y, su.z, sv.x, sv.y, sv.z),
+                (rsu.x, rsu.y, rsu.z, rsv.x, rsv.y, rsv.z),
+            ):
+                assert contract.float_to_hex(a) == contract.float_to_hex(b)
+
+    def test_normal_at_routed_matches_mirror(self):
+        from geometrykit.runtimes._npu import surface_np
+
+        surf = _surface()
+        for u, v in self._stations():
+            mine = surf.normal_at(u, v)
+            ref = surface_np.eval_normal(surf, u, v)
+            for a, b in zip((mine.x, mine.y, mine.z), (ref.x, ref.y, ref.z)):
+                assert contract.float_to_hex(a) == contract.float_to_hex(b)
+
+    def test_project_routed_matches_mirror(self):
+        from geometrykit.runtimes._npu import surface_np
+
+        surf = _surface()
+        for p in TestEvaluationParity._targets():
+            mine_p, mine_uv = surf.project(p)
+            ref_p, ref_uv = surface_np.project_point(surf, p)
+            for a, b in zip(
+                (mine_p.x, mine_p.y, mine_p.z, mine_uv[0], mine_uv[1]),
+                (ref_p.x, ref_p.y, ref_p.z, ref_uv[0], ref_uv[1]),
+            ):
+                assert contract.float_to_hex(a) == contract.float_to_hex(b)
+

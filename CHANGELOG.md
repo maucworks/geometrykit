@@ -29,6 +29,18 @@
   on structured targets (corner minima, edge grazing, interior curl)
   AND an 80-target fixed-seed shower across [-1.5, 2.5]^3: every
   (point, u, v) float identical.
+- **Phase 3 cutover (dispatch)** (`runtimes/dispatch.py`,
+  `Surface.point_at/tangents_at/normal_at/project`): the public kernel
+  API routes through `engine.engine()` -- the `_rust` extension when
+  importable, the mirror otherwise. Routed-vs-mirror bit-identity is a
+  dedicated parity class (`TestRoutedParity`) plus suite runs in both
+  engine configurations. Error contract preserved (zero weight-sum
+  `ZeroDivisionError` from both engines; core returns the mirror's
+  message, the wrapper maps it -- no Rust panic crosses Python).
+  Timing on the shipped front patch (nu=16, G2+fill+adaptive, oracle
+  env): 0.717 s routed vs 0.754 s mirror -- the residual per-call
+  saving P0's cache did not already collapse; row assembly remains the
+  dominant share and is port 3's target.
 
 - **Energy-minimising plate fill** (`patch_np.discrete_plate_fill`,
   `linalg_np.plate_fill`): the interior is the thin-plate solution through
