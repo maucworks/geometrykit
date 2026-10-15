@@ -23,6 +23,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -31,11 +33,11 @@ jobs:
       - name: Install (editable; engine built via maturin when rust)
         shell: bash
         run: |
+          python -m pip install -e ".[dev]"
           if [[ "${{ matrix.engine }}" == "rust" ]]; then
             python -m pip install "maturin>=1,<2"
             python scripts/build_rust_extension.py
           fi
-          python -m pip install -e ".[dev]"
       - name: Suite (engine=${{ matrix.engine }})
         env:
           GEOMETRYKIT_ENGINE: ${{ matrix.engine }}

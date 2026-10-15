@@ -45,10 +45,15 @@ def _run(cmd: list, cwd: Path | None = None) -> None:
 def build_extension() -> Path:
     """Release-build the core-in-python module: returns the .so copy."""
     _run(["cargo", "build", "--release", "--quiet"], cwd=CRATE)
-    dylib = CRATE.parent / "target" / "release" / "lib_rust.dylib"
+    release = CRATE.parent / "target" / "release"
+    if sys.platform == "win32":
+        dylib, so_name = release / "_rust.dll", "_rust.pyd"
+    elif sys.platform == "darwin":
+        dylib, so_name = release / "lib_rust.dylib", "_rust.abi3.so"
+    else:
+        dylib, so_name = release / "lib_rust.so", "_rust.abi3.so"
     if not dylib.exists():
         raise SystemExit(f"cargo produced no dylib at {dylib}")
-    so_name = "_rust.abi3.so"
     out = Path(sys.argv[0]).resolve().parent.parent / "wip"
     out.mkdir(exist_ok=True)
     copy = out / so_name

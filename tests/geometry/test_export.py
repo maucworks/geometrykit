@@ -326,7 +326,7 @@ class TestStepRealFormatting:
             assert "." in text, (value, text)
             assert float(text) == float(value)
 
-    def test_exported_text_has_no_dotless_reals(self):
+    def test_exported_text_has_no_dotless_reals(self, tmp_path):
         import re
 
         from geometrykit.export import write_step_geometry
@@ -335,7 +335,7 @@ class TestStepRealFormatting:
 
         curve = Curve.from_points([Vec(0, 0, 0), Vec(1e-06, 2e-06, 3e-05)], degree=1)
         text = write_step_geometry(
-            "/tmp/tiny.step", curves=[curve], curve_labels=["T"],
+            str(tmp_path / "tiny.step"), curves=[curve], curve_labels=["T"],
             points=[Vec(1e-06, 0.0, 0.0)], point_labels=["P"],
         )
         bad = re.findall(r"[(,]-?\d+e[+-]?\d+", text)

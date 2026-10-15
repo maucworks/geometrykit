@@ -57,7 +57,8 @@ jobs:
       - name: Wheel smoke test (binary engine selected + parity)
         shell: python
         run: |
-          import glob, platform
+          import glob
+          import subprocess
           import sys
           wheel = glob.glob("wip/wheelhouse/*cp39-abi3-*.whl")[0]
           sys.exit(subprocess.call([sys.executable, "-m", "pip",
