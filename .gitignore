@@ -15,3 +15,8 @@ htmlcov/
 
 # scratch work: userland tests, generated geometry, viewer files
 wip/
+
+# the _rust extension is built locally (scripts/build_rust_extension.py),
+# never committed: it lives inside the package dir on editable installs
+python/geometrykit/_rust*.so
+target/

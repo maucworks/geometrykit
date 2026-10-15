@@ -1,5 +1,18 @@
 # Unreleased — the energy fill (M0-M8) + OCC-free pipeline
 
+- **Rust scaffold, Phase 1** (`crates/`): the engine split now exists.
+  `crates/geometrykit-core` holds the kernels in pure Rust (no pyo3,
+  `#![forbid(unsafe_code)]`), starting with the contract float layer
+  (`bits_hex`, bit-identical to `contract.float_to_hex` incl. signed
+  zeros and NaN payloads); `crates/geometrykit-py` is pyo3 marshalling
+  only and builds via maturin as `geometrykit._rust`
+  (`scripts/build_rust_extension.py`). The engine probe prefers the
+  extension when importable, `GEOMETRYKIT_ENGINE=npu` forces the
+  mirror. Parity harness (`test_engine_parity.py`) proves signature
+  stability across two builds of the same kernel data and, with the
+  extension present, cross-language float-bit agreement on every
+  kernel result — the gate Phase 2 ports land against.
+
 - **Energy-minimising plate fill** (`patch_np.discrete_plate_fill`,
   `linalg_np.plate_fill`): the interior is the thin-plate solution through
   the boundary ring, not the Coons blend. Simply-supported by default;

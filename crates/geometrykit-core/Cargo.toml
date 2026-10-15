@@ -1,0 +1,16 @@
+# This file was generated with the assistance of an AI coding tool.
+[package]
+name = "geometrykit-core"
+description = "Geometry kernels (NURBS evaluation, projection, sections) — pure Rust, no bindings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository = "https://github.com/maucworks/geometrykit"
+keywords = ["geometry", "nurbs", "splines", "curve", "surface"]
+categories = ["graphics", "mathematics", "science"]
+
+[dependencies]
+
+[lib]
+name = "geometrykit_core"
+path = "src/lib.rs"
