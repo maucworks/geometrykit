@@ -12,7 +12,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geometrykit"
-version = "0.4.0"
+version = "0.5.0"
 description = "Geometry primitives and NURBS data model — the geometry substrate for the ifckit family"
 readme = "README.md"
 requires-python = ">=3.9"

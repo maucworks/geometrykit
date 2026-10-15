@@ -1,3 +1,8 @@
+# v0.5.0 — 2026-10-16: the precompiled wheel matrix (pip installs the
+# rust engine per platform; abi3-py39 covers Rhino 8's CPython 3.9.11)
+# plus the corrected binary-wheel metadata (Root-Is-Purelib=false, the
+# RECORD self-row). Pure wheel unchanged as the universal fallback.
+
 # v0.4.0 — 2026-10-15 (first upload under this version; the 0.2.0/0.3.0
 # milestones below were internal trains without a PyPI upload)
 
