@@ -2,6 +2,14 @@
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+# The pure wheel (py3-none-any) is built by setuptools above: the
+# always-works fallback (full mirror, no accelerator). The binary
+# wheels carrying the compiled `_rust.abi3.so` are built by maturin per
+# platform from crates/geometrykit-py, whose own pyproject.toml config
+# points at this python/ tree (maturin reads the pyproject next to the
+# cargo manifest, not the build-system above). One release publishes
+# both routes together.
+
 [project]
 name = "geometrykit"
 version = "0.4.0"
