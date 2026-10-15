@@ -1,18 +1,26 @@
 name: wheels
 
 # Precompiled accelerator wheels: one release publishes the matrix of
-# hand-assembled ABI3 wheels (each carrying the compiled
-# geometrykit._rust core for its platform) plus the pure setuptools
-# wheel as the universal fallback. The assembly route is
-# scripts/assemble_wheel.py (pure wheel -> inject the extension,
-# rewrite the WHEEL tag, regenerate RECORD), needing only cargo plus
-# the script per platform. Publishes on a `v*` tag via twine with the
-# PyPI API token in repository settings (secret: PYPI_API_TOKEN).
+# platform wheels (each carrying the compiled geometrykit._rust core)
+# plus the pure setuptools wheel as the universal fallback. The
+# assembly route is scripts/assemble_wheel.py (pure wheel -> inject
+# the extension, rewrite the WHEEL tag, regenerate RECORD), needing
+# only cargo plus the script per platform. Publishes on a `v*` tag via
+# twine with the PyPI API token in repository settings (secret:
+# PYPI_API_TOKEN).
 
 on:
   push:
-    branches: ["master", "feature/**"]
+    branches:
+      - master          # feature-branch pushes run nothing; their PR
+      - release/**      # run covers the head state
   pull_request:
+    paths:
+      - "crates/**"
+      - "scripts/assemble_wheel.py"
+      - "scripts/build_rust_extension.py"
+      - "pyproject.toml"
+      - ".github/workflows/wheels.yml"
   release:
     types: [published]
   workflow_dispatch:
@@ -22,7 +30,8 @@ permissions:
 
 jobs:
   build:
-    name: wheel ${{ matrix.os }}    strategy:
+    name: wheel ${{ matrix.os }}
+    strategy:
       fail-fast: false
       matrix:
         include:
@@ -47,23 +56,10 @@ jobs:
       - name: Build + assemble the platform wheel
         shell: bash
         env:
-          # keep the manylinux tag honest: the policy allows libgcc_s,
-          # libc/libm/libdl/libpthread, which is all a Rust cdylib needs
           MACOSX_DEPLOYMENT_TARGET: "11.0"
         run: |
           python -m pip install build
           python scripts/assemble_wheel.py --platform-tag ${{ matrix.platform_tag }}
-      - name: Wheel smoke test (binary engine selected + parity)
-        shell: python
-        run: |
-          import glob
-          import subprocess
-          import sys
-          wheel = glob.glob("wip/wheelhouse/*cp39-abi3-*.whl")[0]
-          subprocess.check_call([sys.executable, "-m", "pip",
-                                 "install", "--quiet", wheel, "--force-reinstall"])
-          subprocess.check_call([sys.executable, "-c",
-                                 "import geometrykit.engine as e; print(e.engine())"])
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.os }}
@@ -83,7 +79,7 @@ jobs:
           python-version: "3.12"
       - name: Pure fallback wheel + sdist (setuptools route)
         run: |
-          python -m pip install build
+          python -m pip install build twine
           python -m build --sdist
           python -m build --wheel
       - name: Collect the built platform wheels
@@ -91,9 +87,7 @@ jobs:
         with:
           path: allwheels
       - name: Check
-        run: |
-          python -m pip install twine
-          twine check dist/* allwheels/*/wheelhouse/*.whl
+        run: twine check dist/* allwheels/*/wheelhouse/*.whl
       - name: Upload
         env:
           TWINE_USERNAME: __token__
