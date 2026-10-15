@@ -28,14 +28,18 @@ jobs:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
         if: matrix.engine == 'rust'
-      - name: Install (editable; engine built via maturin when rust)
+      - name: Install (editable; engine built when rust)
         shell: bash
         run: |
+          # editable install first: the build script resolves the
+          # package dir through `import geometrykit`, so it needs the
+          # install to exist (local dev venvs have it; a bare CI
+          # interpreter does not)
+          python -m pip install -e ".[dev]"
           if [[ "${{ matrix.engine }}" == "rust" ]]; then
             python -m pip install "maturin>=1,<2"
             python scripts/build_rust_extension.py
           fi
-          python -m pip install -e ".[dev]"
       - name: Suite (engine=${{ matrix.engine }})
         env:
           GEOMETRYKIT_ENGINE: ${{ matrix.engine }}
