@@ -308,6 +308,8 @@ def plate_fill(
     ny: int,
     slopes: dict | None = None,
     curvatures: dict | None = None,
+    claims: dict | None = None,
+    fixed: set | None = None,
     steps: tuple = (1.0, 1.0),
 ) -> list:
     """Fill a grid interior with a minimising plate through its boundary data.
@@ -422,7 +424,11 @@ def plate_fill(
     # contributions and renders the reduced matrix indefinite (exactly what
     # the first elimination attempt hit, with the Hermite pin on ring 1).
     interior = [(i, j) for i in range(1, nx) for j in range(1, ny)]
-    reduced = [point for point in interior if point not in claimed]
+    extra_fixed = set(fixed) if fixed is not None else set()
+    reduced = [
+        point for point in interior
+        if point not in claimed and point not in extra_fixed
+    ]
     index = {point: k for k, point in enumerate(reduced)}
 
     def _value(point):
@@ -523,8 +529,9 @@ def plate_fill(
         for a, alpha in weights_r.items():
             ta = index.get(a)
             for q, w in row.items():
-                if q[0] == 0 or q[0] == nx or q[1] == 0 or q[1] == ny:
-                    # fixed boundary ring: data
+                if q[0] == 0 or q[0] == nx or q[1] == 0 or q[1] == ny \
+                        or q in extra_fixed:
+                    # fixed: the boundary ring or an interior Dirichlet line
                     if ta is not None:
                         value = _value(q)
                         for comp in range(3):

@@ -410,6 +410,39 @@ def discrete_coons_patch(
     return surface, {k: Vec(*v) for k, v in corners.items()}
 
 
+def _extension_point(
+    curve, side: str, arc_offset: float
+) -> tuple:
+    """Extend a curve beyond an endpoint along its own tangent and curvature.
+
+    The cubic Taylor of the curve around the endpoint, evaluated at the arc
+    offset *outward*: p(-s) = p(0) - s*T0 + s^2/2 * dT/ds with T0 the unit
+    end tangent and dT/ds the curvature vector from a backward finite
+    difference. This is belt data (the loose fill's outer ring, which gets
+    trimmed away), so second-order fidelity is the point of the exercise.
+    """
+    if side == "start":
+        t0, t1 = 0.0, 1e-3
+        sign = -1.0
+    else:
+        t0, t1 = 1.0, 1.0 - 1e-3
+        sign = 1.0
+    p0 = curve.point_at(t0)
+    tan0 = curve.tangent_at(t0)
+    tan1 = curve.tangent_at(t1)
+    n0 = (tan0.x**2 + tan0.y**2 + tan0.z**2) ** 0.5
+    n1 = (tan1.x**2 + tan1.y**2 + tan1.z**2) ** 0.5
+    t_hat = (tan0.x / n0, tan0.y / n0, tan0.z / n0)
+    t_next = (tan1.x / n1, tan1.y / n1, tan1.z / n1)
+    p1 = curve.point_at(t1)
+    ds = (abs(p1.x - p0.x) + abs(p1.y - p0.y) + abs(p1.z - p0.z)) or 1e-9
+    curvature = tuple(sign * (t_next[k] - t_hat[k]) / ds for k in range(3))
+    x = p0.x + sign * arc_offset * t_hat[0] + 0.5 * arc_offset**2 * curvature[0]
+    y = p0.y + sign * arc_offset * t_hat[1] + 0.5 * arc_offset**2 * curvature[1]
+    z = p0.z + sign * arc_offset * t_hat[2] + 0.5 * arc_offset**2 * curvature[2]
+    return (x, y, z)
+
+
 def discrete_plate_fill(
     curves: Sequence,
     nu: int = 8,
@@ -420,23 +453,38 @@ def discrete_plate_fill(
     slopes: dict | None = None,
     curvatures: dict | None = None,
     steps: tuple | None = None,
+    loose: int = 0,
 ):
     """A four-boundary patch whose interior is a minimising plate fill.
 
-    The boundary is the same station grid the Coons patch uses (so the boundary
-    curves are interpolated exactly and the station map is unchanged); the
-    interior is *not* the bilinear blend but the solution of the thin-plate
-    equation through that boundary, which is what gives an energy-minimising
-    fill its even curvature instead of a flat middle with bent edges.
+    The boundary is the same station grid the Coons patch uses (so the
+    boundary curves are interpolated exactly and the station map is
+    unchanged); the interior is *not* the bilinear blend but the solution
+    of the thin-plate equation through that boundary, which is what gives
+    an energy-minimising fill its even curvature instead of a flat middle
+    with bent edges.
 
     The plate is simply supported by default (see `linalg_np.plate_fill`),
     which is what makes the fourth-order problem well posed from boundary
     values alone. ``slopes`` upgrades a side to the clamped closure -- the
     support's cross-derivative is then a boundary condition of the solve
-    itself, which is where a G1-constrained fill gets its stiffness without
-    post-hoc corrections. ``curvatures`` (per side, needing slopes on that
-    side) pins the first ring inward to the Hermite value -- the G2 condition
-    inside the solve. ``steps`` is the grid spacing ``(du, dv)``.
+    itself, which is what gives an energy-minimising fill its stiffness
+    without post-hoc corrections. ``curvatures`` (per side, needing slopes
+    on that side) pins the first ring inward to the Hermite value -- the
+    G2 condition inside the solve. ``steps`` is the grid spacing
+    ``(du, dv)``.
+
+    With ``loose`` = e > 0 the solve runs over a grid *enlarged* by e
+    stations on every side -- this library's version of OCC's plate
+    construction, where the fill surface runs *through* the edges and is
+    trimmed afterwards: the original edge lines become exact interior
+    Dirichlet lines, the slope conditions become interior derivative lines
+    (claims: one station outward expressed through the inward neighbour),
+    and the extension belt's outer ring comes from tangent+curvature
+    continuation of the boundary curves. What comes back is the window
+    rows e..e+nu-1 re-interpolated with the original station parameters:
+    the boundary is exact as ever, and the plate's bending is free to
+    spend some of itself on the belt instead of the first visible span.
 
     Returns ``(surface, corners)`` like `discrete_coons_patch`.
     """
@@ -447,20 +495,238 @@ def discrete_plate_fill(
     )
     n_u = len(params_u)
     n_v = len(params_v)
-    flat = [(point[0], point[1], point[2]) for row in grid for point in row]
     if steps is None:
         steps = (params_u[1] - params_u[0], params_v[1] - params_v[0])
-    filled = linalg_np.plate_fill(
-        flat, n_u - 1, n_v - 1, slopes=slopes, curvatures=curvatures, steps=steps
+    if loose <= 0:
+        flat = [(point[0], point[1], point[2]) for row in grid for point in row]
+        filled = linalg_np.plate_fill(
+            flat, n_u - 1, n_v - 1, slopes=slopes, curvatures=curvatures, steps=steps
+        )
+        solved = [
+            [filled[i * n_v + j] for j in range(n_v)] for i in range(n_u)
+        ]
+        surface = _tensor_interpolate(
+            solved,
+            params_u,
+            params_v,
+            degree,
+            uniform_knots=parametrization == "arclength",
+        )
+        return surface, {k: Vec(*v) for k, v in corners.items()}
+    return _loose_plate_fill(
+        curves, corners, params_u, params_v, steps, loose,
+        degree, parametrization, slopes, curvatures,
     )
+
+
+_ORIGINAL_EDGES = ("south", "east", "north", "west")
+
+
+def _lin_extend_line(points: list, count: int, which: str) -> list:
+    """Linear continuation of a polyline beyond one end, per index step.
+
+    Used for the corner cells of the loose fill's outer ring, where no
+    cross-slope data exists: each corner cell continues the ring's own
+    local tangent. One step per ring index cell.
+    """
+    if not points:
+        raise ValueError("cannot extend an empty belt line")
+    if which == "start":
+        step = _sub3(_at(points, 1), _at(points, 0))
+        return [_sub3(_at(points, 0), _cust(step, k)) for k in range(count, 0, -1)]
+    step = _sub3(_at(points, -1), _at(points, -2))
+    return [_add3(_at(points, -1), _cust(step, k)) for k in range(1, count + 1)]
+
+
+def _at(points, k):
+    return points[k]
+
+
+def _sub3(a, b):
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _add3(a, b):
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+
+def _cust(step, k):
+    return tuple(k * c for c in step)
+
+
+def _loose_plate_fill(
+    curves, corners, params_u, params_v, steps, e,
+    degree, parametrization, slopes, curvatures,
+):
+    """The loose construction: solve on the enlarged grid, window it.
+
+    The enlarged grid places the original edges at margin e. The outer
+    ring continues each edge *outward in its cross direction* along the
+    support's own cross profile -- first order in the folded slope data,
+    with a second-order term from the curvature data when it is supplied;
+    the corner cells (no cross data) continue each ring's local tangent.
+    The original edge lines are exact interior Dirichlet data; the slope
+    conditions are interior derivative lines expressed as claims (the
+    outward belt station stated through the inward neighbour). The window
+    re-interpolates the original station parameters, so the boundary is as
+    exact as ever and the plate's bending is free to spend part of itself
+    on the belt instead of the first visible span.
+    """
+    from geometrykit.runtimes._npu import linalg_np
+
+    du, dv = steps
+    n_u = len(params_u)
+    n_v = len(params_v)
+    n_xu = n_u + 2 * e
+    n_xv = n_v + 2 * e
+    stride = n_xv
+    oriented = coons_parametrization(
+        curves, nu=n_u - 1, nv=n_v - 1, parametrization=parametrization
+    )[2]
+
+    lines: dict = {}
+    for edge in _ORIGINAL_EDGES:
+        k = _ORIGINAL_EDGES.index(edge)
+        params_line = params_u if edge in ("south", "north") else params_v
+        curve_params = edge_curve_params(oriented, edge, params_line)
+        points = [
+            (p.x, p.y, p.z)
+            for p in (curves[k].point_at(t) for t in curve_params)
+        ]
+        lines[edge] = points
+
+    def _ring(edge, line, factor, step):
+        """One outer ring line: the edge offset along the cross slope.
+
+        ``factor`` is the outward sign in index units: −1 on west/south,
+        +1 on east/north. Folded slope/curvature arrays are per station,
+        and the offset is ``e`` cells of ``e`` per unit index, so the cell
+        at distance k sits at factor * (k * step) per unit of the cross
+        parameter -- the whole ring is at k = e cells.
+        """
+        out = []
+        for s, point in enumerate(line):
+            slope = slopes[edge][s] if slopes is not None else (0.0, 0.0, 0.0)
+            kappa = curvatures[edge][s] if curvatures is not None else (0.0, 0.0, 0.0)
+            # the ring cell sits e cells away from the edge: offset in
+            # cross parameter units = factor * e * step (folded slope and
+            # curvature arrays are derivatives per increasing-index unit)
+            offset = factor * e * step
+            out.append(
+                tuple(
+                    point[c]
+                    + offset * slope[c]
+                    + 0.5 * offset * offset * kappa[c]
+                    for c in range(3)
+                )
+            )
+        return out
+
+    south_ring = _ring("south", lines["south"], -1.0, dv)
+    north_ring = _ring("north", lines["north"], 1.0, dv)
+    west_ring = _ring("west", lines["west"], -1.0, du)
+    east_ring = _ring("east", lines["east"], 1.0, du)
+
+    values: list = [(0.0, 0.0, 0.0)] * (n_xu * n_xv)
+    for s, point in enumerate(south_ring):
+        values[(e + s) * stride] = point
+    for s, point in enumerate(north_ring):
+        values[(e + s) * stride + (n_xv - 1)] = point
+    for s, point in enumerate(west_ring):
+        values[e + s] = point
+    for s, point in enumerate(east_ring):
+        values[(n_xu - 1) * stride + e + s] = point
+
+    def _place_belt(belt_line, cells, mode):
+        for k, point in enumerate(belt_line):
+            coords = cells[k]
+            values[coords[0] * stride + coords[1]] = tuple(point)
+
+    # corner cells: linear continuation of each ring along its own tangent
+    south_cells = [(i, 0) for i in range(e)]
+    _place_belt(_lin_extend_line(south_ring, e, "start"), south_cells, "s")
+    south_cells_hi = [(e + n_u - 1 + k + 1, 0) for k in range(e)]
+    _place_belt(_lin_extend_line(south_ring, e, "end"), south_cells_hi, "s")
+    north_cells_lo = [(i, n_xv - 1) for i in range(e)]
+    _place_belt(_lin_extend_line(north_ring, e, "start"), north_cells_lo, "n")
+    north_cells_hi = [(e + n_u - 1 + k + 1, n_xv - 1) for k in range(e)]
+    _place_belt(_lin_extend_line(north_ring, e, "end"), north_cells_hi, "n")
+    west_cells_lo = [(0, j) for j in range(e)]
+    _place_belt(_lin_extend_line(west_ring, e, "start"), west_cells_lo, "w")
+    west_cells_hi = [(0, e + n_v - 1 + k + 1) for k in range(e)]
+    _place_belt(_lin_extend_line(west_ring, e, "end"), west_cells_hi, "w")
+    east_cells_lo = [(n_xu - 1, j) for j in range(e)]
+    _place_belt(_lin_extend_line(east_ring, e, "start"), east_cells_lo, "e")
+    east_cells_hi = [(n_xu - 1, e + n_v - 1 + k + 1) for k in range(e)]
+    _place_belt(_lin_extend_line(east_ring, e, "end"), east_cells_hi, "e")
+
+    # interior initial guess (overwritten by the solve): bilinear blend
+    for i in range(1, n_xu - 1):
+        for j in range(1, n_xv - 1):
+            b = j / (n_xv - 1)
+            left = values[i * stride][:]
+            right = values[i * stride + (n_xv - 1)][:]
+            values[i * stride + j] = (
+                (1 - b) * left[0] + b * right[0],
+                (1 - b) * left[1] + b * right[1],
+                (1 - b) * left[2] + b * right[2],
+            )
+
+    fixed: set = set()
+    for edge, (i_line, j_offset) in (
+        ("south", (0, e)), ("north", (0, e + n_v - 1)),
+    ):
+        for s, point in enumerate(lines[edge]):
+            values[(e + s) * stride + j_offset] = tuple(point)
+            fixed.add((e + s, j_offset))
+    for edge, (j_line, i_offset) in (("west", (e, 0)), ("east", (e, e + n_v - 1))):
+        for s, point in enumerate(lines[edge]):
+            if edge == "west":
+                values[j_line * stride + (e + s)] = tuple(point)
+                fixed.add((j_line, e + s))
+            else:
+                values[(e + n_u - 1) * stride + (e + s)] = tuple(point)
+                fixed.add((e + n_u - 1, e + s))
+
+    claims: dict = {}
+    if slopes is not None:
+        for edge, vectors in slopes.items():
+            if edge == "south":
+                for s, vector in enumerate(vectors):
+                    claims[(e + s, e - 1)] = (
+                        {(e + s, e + 1): 1.0},
+                        tuple(-2.0 * dv * c for c in vector),
+                    )
+            elif edge == "north":
+                for s, vector in enumerate(vectors):
+                    claims[(e + s, e + n_v)] = (
+                        {(e + s, e + n_v - 2): 1.0},
+                        tuple(2.0 * dv * c for c in vector),
+                    )
+            elif edge == "west":
+                for s, vector in enumerate(vectors):
+                    claims[(e - 1, e + s)] = (
+                        {(e + 1, e + s): 1.0},
+                        tuple(-2.0 * du * c for c in vector),
+                    )
+            else:
+                for s, vector in enumerate(vectors):
+                    claims[(e + n_u, e + s)] = (
+                        {(e + n_u - 2, e + s): 1.0},
+                        tuple(2.0 * du * c for c in vector),
+                    )
+
+    flat = [values[i * stride + j] for i in range(n_xu) for j in range(n_xv)]
+    filled = linalg_np.plate_fill(
+        flat, n_xu - 1, n_xv - 1, claims=claims, fixed=fixed, steps=steps
+    )
+
     solved = [
-        [filled[i * n_v + j] for j in range(n_v)] for i in range(n_u)
+        [filled[(e + i) * stride + (e + j)] for j in range(n_v)]
+        for i in range(n_u)
     ]
     surface = _tensor_interpolate(
-        solved,
-        params_u,
-        params_v,
-        degree,
+        solved, params_u, params_v, degree,
         uniform_knots=parametrization == "arclength",
     )
-    return surface, {k: Vec(*v) for k, v in corners.items()}
+    return surface, corners

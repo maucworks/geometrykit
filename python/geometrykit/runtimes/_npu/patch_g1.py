@@ -1072,6 +1072,7 @@ def constrained_coons_patch(
     g2: bool = False,
     fill: bool = False,
     g2_in_fill: bool = False,
+    loose: int = 0,
     parametrization: str = "chord",
 ):
     """P-1 entry point: G1-constrained discrete Coons patch.
@@ -1117,6 +1118,16 @@ def constrained_coons_patch(
         corner_stations:    stations dropped at each end of an edge (the
                             corner band, where the boundary curves pin
                             the cross-derivative).
+        loose:              stations of enlargement per side for the loose
+                            fill (this library's version of OCC's through-
+                            the-edge plate): the plate is solved over a
+                            grid enlarged by *loose* stations every side --
+                            the original edges become exact interior
+                            Dirichlet lines with their slope conditions as
+                            interior derivative lines -- and the window
+                            returns. The boundary stays as exact as ever;
+                            the plate gets a margin to spend its bending
+                            on. 0 = the classical fill.
 
     Returns:
         ``(surface, corners, stations)`` -- the G1-adjusted surface, the
@@ -1168,6 +1179,7 @@ def constrained_coons_patch(
             parametrization=parametrization,
             slopes=slopes,
             curvatures=curvatures,
+            loose=loose,
         )
 
     fixed = solve_g1_constraints(
