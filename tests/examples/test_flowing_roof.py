@@ -128,12 +128,13 @@ class TestStage2And3Occt:
             for c in curves:
                 assert c.point_at(0.0) is not None and c.point_at(1.0) is not None
 
-    def test_ribbon_is_loud_without_occ(self):
-        """Without pythonocc the ribbon path raises loudly (documented gate)."""
-        if _occ_available():
-            pytest.skip("OCC present — gate state not testable")
-        from geometrykit.geometry.surface import Surface
-
+    def test_ribbon_builds_without_occ(self):
+        """Ribbons are pure kernel: no ImportError without pythonocc, and
+        the spine sits exactly on the support (middle line symmetric)."""
         g = build_curves(DEFAULTS)
-        with pytest.raises(ImportError, match="required"):
-            build_ribbons(g)
+        build_ribbons(g)
+        assert g.ribbons["top"] is not None
+        spine = g.top
+        ribbon = g.ribbons["top"]
+        for t in (0.0, 0.5, 1.0):
+            assert abs(ribbon.point_at(t, 0.5) - spine.point_at(t)) < 1e-12, t

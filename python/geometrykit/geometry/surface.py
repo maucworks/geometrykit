@@ -782,7 +782,8 @@ class Surface:
             angle_deg:     Start angle (degrees).
             angle_end_deg: End angle (degrees).
             angles_deg:    Angles list in degrees (overrides *angles*).
-            n_pts:         Number of samples for the offset curve.
+            n_pts:         Retained for API compatibility (ignored -- the pure
+                            rule samples nothing).
             symmetric:     Centre the ribbon on *curve* (spine in the middle).
 
         Returns:
@@ -803,14 +804,6 @@ class Surface:
             ang_list = [a0, a1]
         else:
             ang_list = [0.0]
-
-        require_occ()
-
-        from OCC.Core.BRep import BRep_Tool
-        from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeWire
-        from OCC.Core.Geom import Geom_BSplineSurface
-        from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE
-        from OCC.Core.TopExp import TopExp_Explorer, topexp
 
         up = Vec(0, 0, 1)
 
@@ -837,28 +830,13 @@ class Surface:
                 perp = perp * c + up * s
             return p, perp
 
-        near_pts: "list[Vec]" = []
-        far_pts: "list[Vec]" = []
-        for i in range(n_pts):
-            t = i / (n_pts - 1)
-            p, perp = _cross(t)
-            if symmetric:
-                near_pts.append(p - perp * (width / 2.0))
-                far_pts.append(p + perp * (width / 2.0))
-            else:
-                near_pts.append(p)
-                far_pts.append(p + perp * width)
-
-        # ── Ruled surface between curve and offset curve ──────────
-        from OCC.Core.BRepFill import BRepFill_Generator
-
-        from geometrykit.geometry.curve import Curve as _Curve
-
+        # ── Rails (pure kernel) ─────────────────────────────────────────
         # One-sided: the spine itself is a rail, exactly as given (no
-        # re-parameterisation). Symmetric: both rails are offsets of the
-        # spine's control net, so the spine lies exactly on the middle line
-        # v = 0.5 -- a ruled surface between same-parameterised rails
-        # interpolates their average there.
+        # re-parameterisation); the far rail offsets the spine's control
+        # net, so both rails share knots, degree and parameterisation.
+        # Symmetric: both rails offset the control net, so the spine lies
+        # exactly on the middle line v = 0.5 -- a ruled surface between
+        # same-parameterised rails interpolates their average there.
         def _perp_at(t):
             _p, perp = _cross(t)
             return perp
@@ -868,87 +846,33 @@ class Surface:
             rail_b = _offset_control_net(curve, +width / 2.0, _perp_at)
         else:
             rail_a = curve
-            rail_b = _Curve.from_points(far_pts)
-        e1 = _build_occ_edge(rail_a)
-        e2 = _build_occ_edge(rail_b)
-        w1 = BRepBuilderAPI_MakeWire(e1).Wire()
-        w2 = BRepBuilderAPI_MakeWire(e2).Wire()
+            rail_b = _offset_control_net(curve, width, _perp_at)
 
-        gen = BRepFill_Generator()
-        gen.AddWire(w1)
-        gen.AddWire(w2)
-        gen.Perform()
-
-        # ── Extract geometry from generator ───────────────────────
-        exp_g = TopExp_Explorer(gen.Shell(), TopAbs_FACE)
-        if not exp_g.More():
-            raise RuntimeError("Ribbon generator produced no face")
-        ribbon_face = exp_g.Current()
-
-        # BRep_Tool.Surface hands back a reference-counted handle. Going via
-        # BRepAdaptor_Surface(...).Surface().Surface() would keep the geometry
-        # alive only through a temporary adaptor, which dangles once that
-        # adaptor is collected -- and a later MakeFilling on the stored ribbon
-        # then segfaults.
-        geom = BRep_Tool.Surface(ribbon_face)
-
-        # Find the edge in the ribbon face that matches the curve
-        p0_crv = curve.point_at(0)
-        p1_crv = curve.point_at(1)
-        curve_edge: object | None = None
-        ee = TopExp_Explorer(ribbon_face, TopAbs_EDGE)
-        while ee.More():
-            e = ee.Current()
-            v0 = topexp.FirstVertex(e)
-            v1 = topexp.LastVertex(e)
-            p0 = BRep_Tool.Pnt(v0)
-            p1 = BRep_Tool.Pnt(v1)
-            d0 = abs(p0.X() - p0_crv.x) + abs(p0.Y() - p0_crv.y) + abs(p0.Z() - p0_crv.z)
-            d1 = abs(p1.X() - p1_crv.x) + abs(p1.Y() - p1_crv.y) + abs(p1.Z() - p1_crv.z)
-            if d0 < 0.1 and d1 < 0.1:
-                curve_edge = e
-                break
-            ee.Next()
-
-        def _downcast(surf):
-            try:
-                return Geom_BSplineSurface.DownCast(surf)
-            except Exception:
-                return None
-
-        bspline = _downcast(geom)
-        if bspline is None:
-            # Fallback: fit BSpline through sample grid
-            from OCC.Core.GeomAbs import GeomAbs_C1
-            from OCC.Core.GeomAPI import GeomAPI_PointsToBSplineSurface
-            from OCC.Core.gp import gp_Pnt
-            from OCC.Core.TColgp import TColgp_Array2OfPnt
-
-            n = n_pts
-            pts = TColgp_Array2OfPnt(1, n, 1, 2)
-            for i in range(n):
-                t = i / (n - 1)
-                p = curve.point_at(t)
-                pts.SetValue(i + 1, 1, gp_Pnt(p.x, p.y, p.z))
-                off = far_pts[i]
-                pts.SetValue(i + 1, 2, gp_Pnt(off.x, off.y, off.z))
-            occ_surf = GeomAPI_PointsToBSplineSurface(
-                pts,
-                1,
-                3,
-                GeomAbs_C1,
-                1e-2,
-            )
-            bspline = _downcast(occ_surf.Surface())
-            if bspline is None:
-                raise RuntimeError("Ribbon result is not a BSpline surface")
-
-        result = cls.from_occ_surface(bspline)
-        # Cache the OCC face + edge for fast G1 lookup in patch()
-        if curve_edge is not None:
-            result._occ_face = ribbon_face
-            result._occ_edge = curve_edge
-        return result
+        # ── Exact ruled surface between the rails ─────────────────────────
+        # Degree 1 in v over the two rails: S(u, v) = (1-v) A(u) + v B(u).
+        # No sampling, no fitting, no OCC -- n_pts is retained for API
+        # compatibility only. (_support_face_and_edge rebuilds an OCC face
+        # on demand for the reference twin path, so no cached face is
+        # needed here.)
+        if (
+            len(rail_a.points) != len(rail_b.points)
+            or rail_a.degree != rail_b.degree
+            or list(rail_a.knots) != list(rail_b.knots)
+        ):
+            raise ValueError("ribbon rails lost their common parameterisation")
+        net_rows = [
+            [Vec(pa.x, pa.y, pa.z), Vec(pb.x, pb.y, pb.z)]
+            for pa, pb in zip(rail_a.points, rail_b.points)
+        ]
+        return cls(
+            control_points=net_rows,
+            uknots=list(rail_a.knots),
+            vknots=[0.0, 1.0],
+            umults=[int(m) for m in rail_a.multiplicities],
+            vmults=[2, 2],
+            udegree=rail_a.degree,
+            vdegree=1,
+        )
 
 
 def _offset_control_net(curve: "Curve", distance: float, perp_at) -> "Curve":
