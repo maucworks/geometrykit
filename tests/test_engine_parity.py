@@ -220,3 +220,52 @@ class TestEvaluationParity:
 
     def test_all_grid_rational(self):
         self._compare_all(self._rational())
+
+    @staticmethod
+    def _targets() -> "list[_Vec]":
+        base = [_Vec(0.37 + u, 2.1 - u, 2.4 + 0.9 * u) for u in _STATIONS]
+        base.append(_Vec(-1.0, -1.0, 3.0))   # beyond the (0,0) corner
+        base.append(_Vec(1.4, -0.4, 3.6))    # grazing the south edge
+        base.append(_Vec(-0.6, 0.4, 3.05))
+        base.append(_Vec(1.05, 1.05, 3.0))   # interior curl, not the corner
+        return base
+
+    def _compare_projection(self, surf):
+        self._compare_projection_from(surf, self._targets())
+
+    def test_projection_bicubic(self):
+        self._compare_projection(_surface())
+
+    def test_projection_rational(self):
+        self._compare_projection(self._rational())
+
+    def test_projection_hail_bicubic(self):
+        """Fixed-seed target shower: 80 targets across the unit cube,
+        plus its pushed-out variants; kills accidental parity."""
+        import random
+
+        rng = random.Random(20261015)
+        ts = []
+        for _ in range(80):
+            ts.append(_Vec(
+                rng.uniform(-1.5, 2.5),
+                rng.uniform(-1.5, 2.5),
+                rng.uniform(1.5, 5.0),
+            ))
+        surf = _surface()
+        self._compare_projection_from(surf, ts)
+
+    def _compare_projection_from(self, surf, pts):
+        from geometrykit import _rust
+        from geometrykit.runtimes._npu import surface_np
+
+        mine = [surface_np.project_point(surf, p, m=6, n=6, iters=40) for p in pts]
+        mine_rows = [(q.x, q.y, q.z, uv[0], uv[1]) for q, uv in mine]
+        flat = [c for p in pts for c in (p.x, p.y, p.z)]
+        theirs = _rust.project_grid(surf, flat)
+        got = [tuple(theirs[k:k + 5]) for k in range(0, len(theirs), 5)]
+        for (a, b) in zip(mine_rows, got):
+            for va, vb in zip(a, b):
+                assert contract.float_to_hex(va) == contract.float_to_hex(vb), (va, vb)
+        assert _sig(mine_rows) == _sig(got)
+

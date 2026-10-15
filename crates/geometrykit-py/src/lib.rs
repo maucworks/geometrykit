@@ -119,6 +119,24 @@ fn eval_all_grid(
     Ok(out)
 }
 
+/// Nearest surface point per flat `[x, y, z] * n` target; flat
+/// `[px, py, pz, u, v] * n` out. Default P0.1 knobs (m=n=6, iters=40).
+#[pyfunction]
+fn project_grid(surface: &Bound<'_, PyAny>, pts: Vec<f64>) -> PyResult<Vec<f64>> {
+    if pts.len() % 3 != 0 {
+        return Err(PyValueError::new_err("pts must be flat xyz triples"));
+    }
+    let s = _payload(surface)?;
+    let mut out = Vec::with_capacity(pts.len() / 3 * 5);
+    for c in pts.chunks_exact(3) {
+        let (q, uv) = s.project_point(&[c[0], c[1], c[2]], 6, 6, 40);
+        out.extend_from_slice(&q);
+        out.push(uv.0);
+        out.push(uv.1);
+    }
+    Ok(out)
+}
+
 /// Python module bootstrap. Extension comes in as `geometrykit._rust`.
 #[pymodule]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -126,5 +144,6 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bits_hex, m)?)?;
     m.add_function(wrap_pyfunction!(eval_point_grid, m)?)?;
     m.add_function(wrap_pyfunction!(eval_all_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(project_grid, m)?)?;
     Ok(())
 }

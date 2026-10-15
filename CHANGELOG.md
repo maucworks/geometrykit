@@ -20,6 +20,15 @@
   deterministic saddle patch and its rational twin, including clamped
   stations and both domain ends: every IEEE pattern equal. Batch
   marshalling: one Python round-trip per grid, not per station.
+- **Phase 2 port 2: projection** (`project_point`, `_newton`,
+  `_edge_min` core port + `geometrykit._rust.project_grid`): the P0.1
+  algorithm verbatim -- coarse point-only grid, distinct-seed damped
+  Gauss-Newton (early-gradient break, degenerate-det break, five-step
+  halving, domain clamp), then the four boundary isocurves by
+  golden-section, global best kept. Mirror vs. extension bit-for-bit
+  on structured targets (corner minima, edge grazing, interior curl)
+  AND an 80-target fixed-seed shower across [-1.5, 2.5]^3: every
+  (point, u, v) float identical.
 
 - **Energy-minimising plate fill** (`patch_np.discrete_plate_fill`,
   `linalg_np.plate_fill`): the interior is the thin-plate solution through

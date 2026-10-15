@@ -276,6 +276,185 @@ impl Surface {
             ],
         }
     }
+
+    /// Squared L2 distance — same left-to-right association as the
+    /// mirror's Python `a * a + b * b + c * c` sums.
+    fn dist2(&self, q: &Pt, pt: &Pt) -> f64 {
+        let rx = q[0] - pt[0];
+        let ry = q[1] - pt[1];
+        let rz = q[2] - pt[2];
+        rx * rx + ry * ry + rz * rz
+    }
+
+    /// Damped Gauss-Newton on `r.Su = r.Sv = 0` from one seed.
+    ///
+    /// Verbatim mirror `_newton`: terminates early on a tiny gradient,
+    /// halts on a degenerate normal matrix, halves the step while the
+    /// residual grows (five attempts), domain-clamps trial stations.
+    /// Returns `(dist2, u, v)` with the accepted station, which the
+    /// mirror does NOT re-evaluate.
+    fn newton(
+        &self,
+        pt: &Pt,
+        mut uu: f64,
+        mut vv: f64,
+        u0: f64,
+        u1: f64,
+        v0: f64,
+        v1: f64,
+        iters: usize,
+    ) -> (f64, f64, f64) {
+        let domain = 10.0 * ((u1 - u0) + (v1 - v0));
+        let e = self.eval_all(uu, vv);
+        let (mut q, mut su, mut sv) = (e.pt, e.su, e.sv);
+        let mut dist = self.dist2(&q, pt);
+        for _ in 0..iters.max(1) {
+            let rx = q[0] - pt[0];
+            let ry = q[1] - pt[1];
+            let rz = q[2] - pt[2];
+            let gu = rx * su[0] + ry * su[1] + rz * su[2];
+            let gv = rx * sv[0] + ry * sv[1] + rz * sv[2];
+            if gu.abs() + gv.abs() < 1e-10 {
+                break;
+            }
+            let suu = su[0] * su[0] + su[1] * su[1] + su[2] * su[2];
+            let svv = sv[0] * sv[0] + sv[1] * sv[1] + sv[2] * sv[2];
+            let suv = su[0] * sv[0] + su[1] * sv[1] + su[2] * sv[2];
+            let det = suu * svv - suv * suv;
+            if det.abs() < 1e-20 {
+                break;
+            }
+            let mut du = -(gu * svv - gv * suv) / det;
+            let mut dv = -(gv * suu - gu * suv) / det;
+            if du.abs() + dv.abs() > domain {
+                du *= 0.5;
+                dv *= 0.5;
+            }
+            let mut step = 1.0;
+            let mut accepted = false;
+            for _ in 0..5 {
+                let tu = (uu + step * du).max(u0).min(u1);
+                let tv = (vv + step * dv).max(v0).min(v1);
+                let trial = self.eval_point(tu, tv);
+                let td = self.dist2(&trial, pt);
+                if td <= dist {
+                    uu = tu;
+                    vv = tv;
+                    dist = td;
+                    accepted = true;
+                    break;
+                }
+                step *= 0.5;
+            }
+            if !accepted {
+                break;
+            }
+            let e = self.eval_all(uu, vv);
+            q = e.pt;
+            su = e.su;
+            sv = e.sv;
+        }
+        (dist, uu, vv)
+    }
+
+    /// Golden-section minimum of the distance over one boundary
+    /// isocurve (mirror `_edge_min`, 24 iterations, fixed rationals).
+    fn edge_min(&self, pt: &Pt, fixed: f64, lo: f64, hi: f64, along_u: bool) -> (f64, f64, f64) {
+        let golden = (5.0f64.sqrt() - 1.0) / 2.0;
+        let mut dist_at = |t: f64| -> f64 {
+            let q = if along_u { self.eval_point(t, fixed) } else { self.eval_point(fixed, t) };
+            self.dist2(&q, pt)
+        };
+        let (mut a, mut b) = (lo, hi);
+        let mut c = b - golden * (b - a);
+        let mut e = a + golden * (b - a);
+        let mut fc = dist_at(c);
+        let mut fe = dist_at(e);
+        for _ in 0..24 {
+            if fc < fe {
+                b = e;
+                fe = fc;
+                e = c;
+                c = b - golden * (b - a);
+                fc = dist_at(c);
+            } else {
+                a = c;
+                fc = fe;
+                c = e;
+                e = a + golden * (b - a);
+                fe = dist_at(e);
+            }
+        }
+        let t = 0.5 * (a + b);
+        if along_u {
+            (dist_at(t), t, fixed)
+        } else {
+            (dist_at(t), fixed, t)
+        }
+    }
+
+    /// Nearest surface point to `pt`: `(point, (u, v))` — the P0.1
+    /// algorithm verbatim (no OCC): coarse point-only grid seeds,
+    /// damped Gauss-Newton from the distinct best cells, then the four
+    /// boundary isocurves by golden-section, keeping the global best.
+    pub fn project_point(&self, pt: &Pt, m: usize, n: usize, iters: usize) -> (Pt, (f64, f64)) {
+        let u0 = self.uflat[self.pu];
+        let u1 = self.uflat[self.uflat.len() - self.pu - 1];
+        let v0 = self.vflat[self.pv];
+        let v1 = self.vflat[self.vflat.len() - self.pv - 1];
+
+        // coarse pass: point evaluations only, keep the best few cells
+        let mut coarse: Vec<(f64, f64, f64)> = Vec::with_capacity((m + 1) * (n + 1));
+        for i in 0..=m {
+            for j in 0..=n {
+                let uu = u0 + (u1 - u0) * i as f64 / m as f64;
+                let vv = v0 + (v1 - v0) * j as f64 / n as f64;
+                let d2 = self.dist2(&self.eval_point(uu, vv), pt);
+                coarse.push((d2, uu, vv));
+            }
+        }
+        // stable ascending on dist2, same tie order as Python's sort
+        coarse.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let tol = 0.5
+            * ((u1 - u0) / (m.max(1) as f64)).min((v1 - v0) / (n.max(1) as f64));
+        let mut seeds: Vec<(f64, f64)> = Vec::new();
+        for (_d, uu, vv) in &coarse {
+            if seeds.iter().all(|(s_u, s_v)| {
+                (uu - s_u).abs() + (vv - s_v).abs() > tol
+            }) {
+                seeds.push((*uu, *vv));
+            }
+            if seeds.len() >= 3 {
+                break;
+            }
+        }
+
+        let (d0, bu, bv) = coarse[0];
+        let mut best = (d0, self.eval_point(bu, bv), (bu, bv));
+        for (uu, vv) in &seeds {
+            let (dist, uu2, vv2) =
+                self.newton(pt, *uu, *vv, u0, u1, v0, v1, iters.max(4).min(12));
+            if dist < best.0 {
+                best = (dist, self.eval_point(uu2, vv2), (uu2, vv2));
+            }
+        }
+
+        // boundary isocurves by golden-section
+        for (fixed, lo, hi, along_u) in [
+            (u0, v0, v1, false),
+            (u1, v0, v1, false),
+            (v0, u0, u1, true),
+            (v1, u0, u1, true),
+        ] {
+            let (dist, uu, vv) = self.edge_min(pt, fixed, lo, hi, along_u);
+            if dist < best.0 {
+                best = (dist, self.eval_point(uu, vv), (uu, vv));
+            }
+        }
+        (best.1, best.2)
+    }
 }
 
 #[cfg(test)]
@@ -336,8 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn rational_rescales_positions() {
-        // weighting one pole changes value there but not at unity weight
+    fn rational_rescales_positions() {        // weighting one pole changes value there but not at unity weight
         let (poles, nu, nv) = fixture_poles();
         let w = vec![
             0.5, 1.5, 1.2, 0.9, 1.1, 0.8, 1.4, 1.0, 1.3, 0.7, 1.6, 1.05, 1.02, 1.15, 0.85, 1.25,
@@ -348,5 +526,18 @@ mod tests {
         // at the corner the single pole dominates: value IS the pole
         let c = s.eval_point(0.0, 0.0);
         assert_eq!(c, [0.0, 0.0, 3.0]);
+    }
+
+    #[test]
+    fn projection_finds_boundary_minimum() {
+        let f = fixture();
+        // target beyond the (0,0) corner: the true nearest is the
+        // corner itself (constrained min -- what the boundary
+        // golden-section pass exists for)
+        let (q, uv) = f.project_point(&[-1.0, -1.0, 3.0], 6, 6, 40);
+        assert_eq!(q[0], 0.0);
+        assert_eq!(q[1], 0.0);
+        assert_eq!(q[2], 3.0);
+        assert_eq!(uv, (0.0, 0.0));
     }
 }
