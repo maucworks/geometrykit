@@ -237,7 +237,11 @@ def _chain(segments: list, tol: float) -> list:
     interpolator (which goes singular on them).
     """
     def _same(a, b) -> bool:
-        return abs(a[0] - b[0]) + abs(a[1] - b[1]) <= tol
+        # exact-duplicate scale only: shared grid nodes polish to
+        # bit-identical tracks. (A cell-scale tolerance here ate every
+        # other legitimate crossing -- measured on a plane containing
+        # an isocurve, where crossings sit half a cell apart.)
+        return abs(a[0] - b[0]) + abs(a[1] - b[1]) <= 1e-9
 
     def _append_unique(chain: list, points: list) -> None:
         for point in points:
