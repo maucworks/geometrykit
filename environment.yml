@@ -1,0 +1,26 @@
+# This file was generated with the assistance of an AI coding tool.
+# Oracle test environment for geometrykit.
+#
+# The library itself has no runtime dependencies: `python/geometrykit` runs on
+# the standard library alone. This environment exists only for the *oracle*
+# tier of the test suite -- the tests that check the kernel against OCCT, and
+# the STEP read-back that proves a CAD kernel reconstructs what we wrote.
+# Nothing here is needed to install or use geometrykit.
+#
+#   conda env create -f environment.yml
+#   conda run -n geometrykit-oracle python -m pytest tests/ -q
+#
+# Pins follow the ecosystem rule: >= minimum proven, <= current.
+name: geometrykit-oracle
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.12
+  # OCCT bindings: conda-only, which is exactly why this tier is separate.
+  - pythonocc-core>=7.8,<=8.0
+  - pytest>=7,<10
+  - pip
+  - pip:
+      - -e .

@@ -6,3 +6,12 @@ dist/
 build/
 target/
 .DS_Store
+
+# test artifacts
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+
+# scratch work: userland tests, generated geometry, viewer files
+wip/

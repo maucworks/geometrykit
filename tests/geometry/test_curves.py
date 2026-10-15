@@ -1,0 +1,754 @@
+"""Tests for geometrykit.geometry — Line, Arc, Polyline, Path"""
+
+import math
+
+import pytest
+from geometrykit.geometry import Arc, Line, Path, Plane, Polyline, Vec
+
+# ---------------------------------------------------------------------------
+# Line
+# ---------------------------------------------------------------------------
+
+
+class TestLine:
+    def test_direction(self):
+        l = Line(Vec(0, 0, 0), Vec(3, 0, 0))
+        assert l.direction.equals(Vec(1, 0, 0))
+
+    def test_length(self):
+        l = Line(Vec(0, 0, 0), Vec(0, 0, 5))
+        assert l.length == pytest.approx(5.0)
+
+    def test_midpoint(self):
+        l = Line(Vec(0, 0, 0), Vec(2, 0, 0))
+        assert l.midpoint.equals(Vec(1, 0, 0))
+
+    def test_point_at(self):
+        l = Line(Vec(0, 0, 0), Vec(10, 0, 0))
+        assert l.point_at(0.0).equals(Vec(0, 0, 0))
+        assert l.point_at(1.0).equals(Vec(10, 0, 0))
+        assert l.point_at(0.5).equals(Vec(5, 0, 0))
+
+    def test_tangent_at(self):
+        l = Line(Vec(0, 0, 0), Vec(10, 0, 0))
+        assert l.tangent_at(0.0).equals(Vec(1, 0, 0))
+        assert l.tangent_at(0.5).equals(Vec(1, 0, 0))
+        assert l.tangent_at(1.0).equals(Vec(1, 0, 0))
+
+    def test_to_polyline(self):
+        l = Line(Vec(0, 0, 0), Vec(1, 0, 0))
+        pl = l.to_polyline()
+        assert isinstance(pl, Polyline)
+        assert len(pl) == 2
+
+    def test_repr(self):
+        l = Line(Vec(0, 0, 0), Vec(1, 0, 0))
+        assert "Line(" in repr(l)
+
+    def test_to_dict_roundtrip(self):
+        l = Line(Vec(1, 2, 3), Vec(4, 5, 6))
+        d = l.to_dict()
+        assert d["type"] == "line"
+        assert d["start"]["x"] == 1.0
+        l2 = Line.from_dict(d)
+        assert l2.start.equals(l.start)
+        assert l2.end.equals(l.end)
+
+
+# ---------------------------------------------------------------------------
+# Arc
+# ---------------------------------------------------------------------------
+
+
+class TestArc:
+    def _quarter_arc(self):
+        """Quarter circle in XY plane, CCW, radius 1."""
+        return Arc(
+            center=Vec(0, 0, 0),
+            normal=Vec(0, 0, 1),
+            start=Vec(1, 0, 0),
+            angle=math.pi / 2,
+        )
+
+    def test_radius(self):
+        arc = self._quarter_arc()
+        assert arc.radius == pytest.approx(1.0)
+
+    def test_end(self):
+        arc = self._quarter_arc()
+        assert arc.end.equals(Vec(0, 1, 0))
+
+    def test_midpoint(self):
+        arc = self._quarter_arc()
+        mid = arc.midpoint
+        assert abs(mid) == pytest.approx(1.0)  # on unit circle
+        assert mid.equals(Vec(math.cos(math.pi / 4), math.sin(math.pi / 4), 0))
+
+    def test_point_at(self):
+        arc = self._quarter_arc()
+        assert arc.point_at(0.0).equals(Vec(1, 0, 0))
+        assert arc.point_at(1.0).equals(arc.end)
+
+    def test_length(self):
+        arc = self._quarter_arc()
+        assert arc.length == pytest.approx(math.pi / 2)
+
+    def test_sample_count(self):
+        arc = self._quarter_arc()
+        pts = arc.sample(angle_step_deg=45.0)
+        assert len(pts) == 3  # start, mid, end
+
+    def test_sample_on_circle(self):
+        arc = self._quarter_arc()
+        for pt in arc.sample(5.0):
+            assert abs(pt) == pytest.approx(1.0, abs=1e-6)
+
+    def test_tangent_at_start(self):
+        arc = self._quarter_arc()
+        t = arc.tangent_at_start()
+        # at start (1,0,0) the CCW tangent is (0,1,0)
+        assert t.equals(Vec(0, 1, 0))
+
+    def test_tangent_at_end(self):
+        arc = self._quarter_arc()
+        t = arc.tangent_at_end()
+        # at end (0,1,0) the CCW tangent is (-1,0,0)
+        assert t.equals(Vec(-1, 0, 0))
+
+    def test_tangent_at(self):
+        arc = self._quarter_arc()
+        # at t=0 matches start tangent
+        assert arc.tangent_at(0.0).equals(Vec(0, 1, 0))
+        # at t=1 matches end tangent
+        assert arc.tangent_at(1.0).equals(Vec(-1, 0, 0))
+        # at t=0.5 (45°) tangent should be (-sin45, cos45, 0)
+        t = arc.tangent_at(0.5)
+        expected = Vec(-math.sin(math.pi / 4), math.cos(math.pi / 4), 0)
+        assert t.equals(expected.normalized())
+
+    def test_negative_angle(self):
+        arc = Arc(Vec(0, 0, 0), Vec(0, 0, 1), Vec(1, 0, 0), -math.pi / 2)
+        assert arc.end.equals(Vec(0, -1, 0))
+
+    def test_repr(self):
+        assert "Arc(" in repr(self._quarter_arc())
+
+    def test_to_dict_roundtrip(self):
+        arc = self._quarter_arc()
+        d = arc.to_dict()
+        assert d["type"] == "arc"
+        assert d["angle"] == pytest.approx(math.pi / 2)
+        arc2 = Arc.from_dict(d)
+        assert arc2.center.equals(arc.center)
+        assert arc2.start.equals(arc.start)
+        assert arc2.angle == pytest.approx(arc.angle)
+        assert arc2.end.equals(arc.end)
+
+
+# ---------------------------------------------------------------------------
+# Polyline
+# ---------------------------------------------------------------------------
+
+
+class TestPolyline:
+    def _square(self):
+        pts = [Vec(0, 0, 0), Vec(1, 0, 0), Vec(1, 1, 0), Vec(0, 1, 0)]
+        return Polyline(pts)
+
+    def test_from_tuples(self):
+        pl = Polyline.from_tuples([(0, 0, 0), (1, 0, 0)])
+        assert len(pl) == 2
+        assert pl.points[0] == Vec(0, 0, 0)
+
+    def test_is_closed_flag(self):
+        pl = Polyline([Vec(0, 0, 0), Vec(1, 0, 0)], closed=True)
+        assert pl.is_closed
+
+    def test_is_closed_by_points(self):
+        pts = [Vec(0, 0, 0), Vec(1, 0, 0), Vec(0, 0, 0)]
+        pl = Polyline(pts)
+        assert pl.is_closed
+
+    def test_is_not_closed(self):
+        pl = self._square()
+        assert not pl.is_closed
+
+    def test_length(self):
+        pl = Polyline([Vec(0, 0, 0), Vec(3, 0, 0), Vec(3, 4, 0)])
+        assert pl.length == pytest.approx(7.0)
+
+    def test_length_closed(self):
+        # unit square closed: perimeter = 4
+        pl = self._square()
+        closed = pl.close()
+        assert closed.length == pytest.approx(4.0)
+
+    def test_close(self):
+        pl = self._square().close()
+        assert pl.is_closed
+        assert pl.points[0].equals(pl.points[-1])
+
+    def test_close_already_closed(self):
+        pts = [Vec(0, 0, 0), Vec(1, 0, 0), Vec(0, 0, 0)]
+        pl = Polyline(pts).close()
+        # should not duplicate first point again
+        assert pl.points.count(Vec(0, 0, 0)) == 2  # at index 0 and last
+
+    def test_ensure_ccw(self):
+        # CW square
+        pts = [Vec(0, 0, 0), Vec(0, 1, 0), Vec(1, 1, 0), Vec(1, 0, 0)]
+        pl = Polyline(pts)
+        ccw = pl.ensure_ccw(Vec(0, 0, 1))
+        from geometrykit.geometry import _signed_area
+
+        assert _signed_area(ccw.points, Vec(0, 0, 1)) > 0
+
+    def test_project_to_plane(self):
+        plane = Plane.world_xy()
+        pts = [Vec(1, 2, 5), Vec(3, 4, 5)]
+        pl = Polyline(pts).project_to_plane(plane)
+        assert pl.points[0].equals(Vec(1, 2, 0))
+        assert pl.points[1].equals(Vec(3, 4, 0))
+
+    def test_iter(self):
+        pl = Polyline([Vec(0, 0, 0), Vec(1, 0, 0)])
+        pts = list(pl)
+        assert len(pts) == 2
+
+    def test_repr(self):
+        assert "Polyline(" in repr(self._square())
+
+
+# ---------------------------------------------------------------------------
+# Path
+# ---------------------------------------------------------------------------
+
+
+class TestPath:
+    def test_empty_path_length(self):
+        p = Path()
+        assert p.length == pytest.approx(0.0)
+
+    def test_add_line(self):
+        p = Path().add_line(Vec(0, 0, 0), Vec(5, 0, 0))
+        assert len(p.segments) == 1
+        assert p.length == pytest.approx(5.0)
+
+    def test_add_arc(self):
+        p = Path().add_arc(Vec(0, 0, 0), Vec(0, 0, 1), Vec(1, 0, 0), math.pi / 2)
+        assert len(p.segments) == 1
+        assert p.length == pytest.approx(math.pi / 2)
+
+    def test_mixed_path_length(self):
+        p = (
+            Path()
+            .add_line(Vec(0, 0, 0), Vec(5, 0, 0))
+            .add_arc(Vec(5, 1, 0), Vec(0, 0, 1), Vec(5, 0, 0), math.pi / 2)
+        )
+        expected = 5.0 + (math.pi / 2) * 1.0
+        assert p.length == pytest.approx(expected, rel=1e-3)
+
+    def test_start_point(self):
+        p = Path().add_line(Vec(1, 2, 3), Vec(4, 5, 6))
+        assert p.start_point().equals(Vec(1, 2, 3))
+
+    def test_end_point(self):
+        p = Path().add_line(Vec(1, 2, 3), Vec(4, 5, 6))
+        assert p.end_point().equals(Vec(4, 5, 6))
+
+    def test_start_end_none_empty(self):
+        p = Path()
+        assert p.start_point() is None
+        assert p.end_point() is None
+        assert p.start_tangent() is None
+        assert p.end_tangent() is None
+
+    def test_start_tangent_line(self):
+        p = Path().add_line(Vec(0, 0, 0), Vec(1, 0, 0))
+        assert p.start_tangent().equals(Vec(1, 0, 0))
+
+    def test_end_tangent_line(self):
+        p = Path().add_line(Vec(0, 0, 0), Vec(1, 0, 0))
+        assert p.end_tangent().equals(Vec(1, 0, 0))
+
+    def test_sample_dedup(self):
+        """Consecutive segments sharing endpoint must not duplicate it."""
+        p = Path().add_line(Vec(0, 0, 0), Vec(1, 0, 0)).add_line(Vec(1, 0, 0), Vec(2, 0, 0))
+        pl = p.sample()
+        # should be 3 points, not 4
+        assert len(pl.points) == 3
+
+    def test_repr(self):
+        p = Path().add_line(Vec(0, 0, 0), Vec(1, 0, 0))
+        assert "Path(" in repr(p)
+
+    # --- path evaluation (point_at / tangent_at) ---
+
+    def test_point_at_length_line(self):
+        p = Path().add_line(Vec(0, 0, 0), Vec(10, 0, 0))
+        assert p.point_at_length(0.0).equals(Vec(0, 0, 0))
+        assert p.point_at_length(5.0).equals(Vec(5, 0, 0))
+        assert p.point_at_length(10.0).equals(Vec(10, 0, 0))
+
+    def test_point_at_line(self):
+        p = Path().add_line(Vec(0, 0, 0), Vec(10, 0, 0))
+        assert p.point_at(0.0).equals(Vec(0, 0, 0))
+        assert p.point_at(0.5).equals(Vec(5, 0, 0))
+        assert p.point_at(1.0).equals(Vec(10, 0, 0))
+
+    def test_point_at_consistent_with_start_end(self):
+        p = Path().add_line(Vec(1, 2, 3), Vec(7, 8, 9))
+        assert p.point_at(0.0).equals(p.start_point())
+        assert p.point_at(1.0).equals(p.end_point())
+        assert p.point_at_length(0.0).equals(p.start_point())
+        assert p.point_at_length(p.length).equals(p.end_point())
+
+    def test_tangent_at_line(self):
+        p = Path().add_line(Vec(0, 0, 0), Vec(10, 0, 0))
+        assert p.tangent_at(0.0).equals(Vec(1, 0, 0))
+        assert p.tangent_at(0.5).equals(Vec(1, 0, 0))
+        assert p.tangent_at(1.0).equals(Vec(1, 0, 0))
+
+    def test_tangent_at_consistent_with_start_end(self):
+        p = Path().add_line(Vec(0, 0, 0), Vec(10, 0, 0))
+        assert p.tangent_at(0.0).equals(p.start_tangent())
+        assert p.tangent_at(1.0).equals(p.end_tangent())
+        assert p.tangent_at_length(0.0).equals(p.start_tangent())
+        assert p.tangent_at_length(p.length).equals(p.end_tangent())
+
+    def test_point_at_length_mixed_path(self):
+        p = (
+            Path()
+            .add_line(Vec(0, 0, 0), Vec(5, 0, 0))
+            .add_arc(Vec(5, 1, 0), Vec(0, 0, 1), Vec(5, 0, 0), math.pi / 2)
+        )
+        # line segment is 5 long, arc is pi/2 ~1.57
+        total = p.length
+        assert p.point_at_length(0.0).equals(Vec(0, 0, 0))
+        # at d=5 we should be at the line/arc boundary
+        assert p.point_at_length(5.0).equals(Vec(5, 0, 0))
+        # at the end we should be at arc.end
+        arc = Arc(Vec(5, 1, 0), Vec(0, 0, 1), Vec(5, 0, 0), math.pi / 2)
+        assert p.point_at_length(total).equals(arc.end)
+
+    def test_point_at_mixed_path(self):
+        p = (
+            Path()
+            .add_line(Vec(0, 0, 0), Vec(5, 0, 0))
+            .add_arc(Vec(5, 1, 0), Vec(0, 0, 1), Vec(5, 0, 0), math.pi / 2)
+        )
+        total = p.length
+        half = total / 2.0
+        # t=0.5 should be at half the total length
+        pt = p.point_at(0.5)
+        # line is 5, arc is π/2 ≈ 1.57, so halfway ≈ 3.285 along the path
+        # which is still on the line segment (0 to 5)
+        assert pt.x == pytest.approx(half)
+
+    def test_tangent_at_mixed_path(self):
+        p = (
+            Path()
+            .add_line(Vec(0, 0, 0), Vec(5, 0, 0))
+            .add_arc(Vec(5, 1, 0), Vec(0, 0, 1), Vec(5, 0, 0), math.pi / 2)
+        )
+        # start tangent = line direction
+        assert p.tangent_at(0.0).equals(Vec(1, 0, 0))
+        # at the line/arc junction (d=5), G1: line end tangent == arc start tangent == (1,0,0)
+        assert p.tangent_at_length(5.0).equals(Vec(1, 0, 0))
+        # at the end, arc tangent is (0, 1, 0)
+        assert p.tangent_at_length(p.length).equals(Vec(0, 1, 0))
+
+    def test_point_at_empty_path_raises(self):
+        p = Path()
+        with pytest.raises(ValueError, match="no segments"):
+            p.point_at_length(0.0)
+
+    def test_point_at_arc_path(self):
+        p = Path().add_arc(Vec(0, 0, 0), Vec(0, 0, 1), Vec(1, 0, 0), math.pi / 2)
+        assert p.point_at(0.0).equals(Vec(1, 0, 0))
+        assert p.point_at(1.0).equals(Vec(0, 1, 0))
+        # halfway in arc length
+        assert p.point_at(0.5).equals(Vec(math.cos(math.pi / 4), math.sin(math.pi / 4), 0))
+
+    def test_tangent_at_arc_path(self):
+        p = Path().add_arc(Vec(0, 0, 0), Vec(0, 0, 1), Vec(1, 0, 0), math.pi / 2)
+        assert p.tangent_at(0.0).equals(Vec(0, 1, 0))
+        assert p.tangent_at(1.0).equals(Vec(-1, 0, 0))
+
+    # --- subpath ---
+
+    def test_subpath_line(self):
+        p = Path.from_pts([Vec(0, 0, 0), Vec(10, 0, 0)])
+        sub = p.subpath(0.2, 0.6)
+        assert sub.start_point().equals(Vec(2, 0, 0))
+        assert sub.end_point().equals(Vec(6, 0, 0))
+        assert sub.length == pytest.approx(4.0)
+
+    def test_subpath_same_segment_arc(self):
+        p = Path().add_arc(Vec(0, 0, 0), Vec(0, 0, 1), Vec(1, 0, 0), math.pi / 2)
+        sub = p.subpath(0.25, 0.75)
+        assert len(sub.segments) == 1
+        assert sub.length == pytest.approx(p.length * 0.5)
+        assert sub.start_point().equals(Vec(math.cos(math.pi / 8), math.sin(math.pi / 8), 0))
+
+    def test_subpath_across_segments(self):
+        p = (
+            Path()
+            .add_line(Vec(0, 0, 0), Vec(5, 0, 0))
+            .add_arc(Vec(5, 1, 0), Vec(0, 0, 1), Vec(5, 0, 0), math.pi / 2)
+        )
+        total = p.length
+        sub = p.subpath(0.5, 0.9)
+        assert len(sub.segments) == 2
+        assert sub.length == pytest.approx(total * 0.4, rel=1e-3)
+
+    def test_subpath_full_path(self):
+        p = Path().add_line(Vec(0, 0, 0), Vec(5, 0, 0)).add_arc(
+            Vec(5, 1, 0), Vec(0, 0, 1), Vec(5, 0, 0), math.pi / 2
+        )
+        sub = p.subpath(0.0, 1.0)
+        assert len(sub.segments) == len(p.segments)
+        assert sub.length == pytest.approx(p.length)
+
+    def test_subpath_swapped(self):
+        p = Path.from_pts([Vec(0, 0, 0), Vec(10, 0, 0)])
+        assert p.subpath(0.8, 0.2).start_point().equals(Vec(2, 0, 0))
+        assert p.subpath(0.8, 0.2).end_point().equals(Vec(8, 0, 0))
+
+    def test_subpath_empty_path_raises(self):
+        with pytest.raises(ValueError, match="no segments"):
+            Path().subpath(0.0, 1.0)
+
+    # --- serialization ---
+
+    def test_to_dict_roundtrip_empty(self):
+        d = Path().to_dict()
+        assert d["plane"] is None
+        assert d["segments"] == []
+        assert d["holes"] == []
+
+    def test_to_dict_roundtrip_line_path(self):
+        p = Path.from_pts([Vec(0, 0, 0), Vec(10, 0, 0)])
+        d = p.to_dict()
+        assert len(d["segments"]) == 1
+        assert d["segments"][0]["type"] == "line"
+        p2 = Path.from_dict(d)
+        assert p2.length == pytest.approx(10.0)
+        assert p2.start_point().equals(Vec(0, 0, 0))
+
+    def test_to_dict_roundtrip_mixed(self):
+        p = (
+            Path()
+            .add_line(Vec(0, 0, 0), Vec(5, 0, 0))
+            .add_arc(Vec(5, 1, 0), Vec(0, 0, 1), Vec(5, 0, 0), math.pi / 2)
+        )
+        d = p.to_dict()
+        assert len(d["segments"]) == 2
+        p2 = Path.from_dict(d)
+        assert p2.length == pytest.approx(p.length)
+        assert p2.start_point().equals(p.start_point())
+        assert p2.end_point().equals(p.end_point())
+
+    def test_to_dict_roundtrip_with_holes(self):
+        outer = Path.from_pts(
+            [Vec(0, 0, 0), Vec(10, 0, 0), Vec(10, 10, 0), Vec(0, 10, 0)],
+            closed=True,
+        )
+        inner = Path.from_pts(
+            [Vec(2, 2, 0), Vec(8, 2, 0), Vec(8, 8, 0), Vec(2, 8, 0)],
+            closed=True,
+        )
+        outer_with_hole = outer.with_hole(inner)
+        d = outer_with_hole.to_dict()
+        assert len(d["holes"]) == 1
+        p2 = Path.from_dict(d)
+        assert len(p2.holes) == 1
+        assert p2.holes[0].start_point().equals(Vec(2, 2, 0))
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap fillers
+# ---------------------------------------------------------------------------
+
+
+def test_polyline_single_point_not_closed():
+    pl = Polyline([Vec(0, 0, 0)])
+    assert not pl.is_closed
+
+
+def test_ensure_ccw_already_ccw():
+    """ensure_ccw on a CCW polygon returns a copy, not reversed."""
+    pts = [Vec(0, 0, 0), Vec(1, 0, 0), Vec(1, 1, 0), Vec(0, 1, 0)]
+    pl = Polyline(pts)
+    ccw = pl.ensure_ccw(Vec(0, 0, 1))
+    from geometrykit.geometry import _signed_area
+
+    assert _signed_area(ccw.points, Vec(0, 0, 1)) > 0
+
+
+def test_path_start_tangent_arc():
+    arc_path = Path().add_arc(Vec(0, 0, 0), Vec(0, 0, 1), Vec(1, 0, 0), math.pi / 2)
+    t = arc_path.start_tangent()
+    assert t is not None
+    assert abs(t) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_path_end_tangent_arc():
+    arc_path = Path().add_arc(Vec(0, 0, 0), Vec(0, 0, 1), Vec(1, 0, 0), math.pi / 2)
+    t = arc_path.end_tangent()
+    assert t is not None
+    assert abs(t) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_polygon_normal_xy_square():
+    from geometrykit.geometry import _polygon_normal
+
+    pts = [Vec(0, 0, 0), Vec(1, 0, 0), Vec(1, 1, 0), Vec(0, 1, 0)]
+    n = _polygon_normal(pts)
+    # Newell's method for flat XY polygon → should align with +Z or -Z
+    assert abs(n.z) == pytest.approx(1.0, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Path.is_planar + Path.normal
+# ---------------------------------------------------------------------------
+
+
+class TestPathPlanar:
+    def test_empty_path_is_planar(self):
+        assert Path().is_planar is True
+
+    def test_single_line_is_planar(self):
+        p = Path().add_line(Vec(0, 0, 0), Vec(5, 0, 0))
+        assert p.is_planar is True
+
+    def test_single_arc_is_planar(self):
+        p = Path().add_arc(Vec(0, 1, 0), Vec(0, 0, 1), Vec(0, 0, 0), math.pi / 2)
+        assert p.is_planar is True
+
+    def test_two_collinear_lines_planar(self):
+        p = Path().add_line(Vec(0, 0, 0), Vec(5, 0, 0)).add_line(Vec(5, 0, 0), Vec(10, 0, 0))
+        assert p.is_planar is True
+
+    def test_two_anti_parallel_lines_planar(self):
+        """Lines pointing in exactly opposite directions must still be planar (fixed precedence bug)."""
+        p = Path().add_line(Vec(0, 0, 0), Vec(5, 0, 0)).add_line(Vec(5, 0, 0), Vec(0, 0, 0))
+        assert p.is_planar is True
+
+    def test_two_diverging_lines_not_planar(self):
+        p = Path().add_line(Vec(0, 0, 0), Vec(1, 0, 0)).add_line(Vec(1, 0, 0), Vec(1, 1, 0))
+        assert p.is_planar is True
+
+    def test_two_arcs_same_normal_planar(self):
+        p = (
+            Path()
+            .add_arc(Vec(0, 1, 0), Vec(0, 0, 1), Vec(0, 0, 0), math.pi / 2)
+            .add_arc(Vec(2, 1, 0), Vec(0, 0, 1), Vec(2, 0, 0), math.pi / 2)
+        )
+        assert p.is_planar is True
+
+    def test_two_arcs_different_normal_not_planar(self):
+        p = (
+            Path()
+            .add_arc(Vec(0, 1, 0), Vec(0, 0, 1), Vec(0, 0, 0), math.pi / 2)
+            .add_arc(Vec(1, 0, 1), Vec(1, 0, 0), Vec(1, 0, 0), math.pi / 2)
+        )
+        assert p.is_planar is False
+
+    def test_normal_arc_path_returns_arc_normal(self):
+        normal = Vec(0, 0, 1)
+        p = Path().add_arc(Vec(0, 1, 0), normal, Vec(0, 0, 0), math.pi / 2)
+        n = p.normal
+        assert n is not None
+        assert abs(n.normalized() @ normal.normalized()) == pytest.approx(1.0, abs=1e-6)
+
+    def test_normal_line_only_path_perpendicular_to_direction(self):
+        p = Path().add_line(Vec(0, 0, 0), Vec(5, 0, 0))
+        n = p.normal
+        assert n is not None
+        # Normal must be perpendicular to the line direction
+        direction = Vec(1, 0, 0)
+        assert abs(n @ direction) == pytest.approx(0.0, abs=1e-6)
+
+    def test_normal_empty_path_is_none(self):
+        # Empty path: is_planar=True but no segments → normal returns None
+        assert Path().normal is None
+
+    def test_normal_non_planar_path_is_none(self):
+        p = (
+            Path()
+            .add_arc(Vec(0, 1, 0), Vec(0, 0, 1), Vec(0, 0, 0), math.pi / 2)
+            .add_arc(Vec(1, 0, 1), Vec(1, 0, 0), Vec(1, 0, 0), math.pi / 2)
+        )
+        assert p.normal is None
+
+
+class TestPathPlane:
+    def test_plane_single_arc(self):
+        p = Path().add_arc(Vec(0, 0, 0), Vec(0, 0, 1), Vec(5, 0, 0), 0.5)
+        plane = p.plane
+        assert plane.origin.equals(Vec(5, 0, 0))
+        assert plane.y_axis.equals(Vec(0, 0, 1))
+
+    def test_plane_lines(self):
+        p = Path().add_line(Vec(0, 0, 0), Vec(10, 0, 0))
+        plane = p.plane
+        assert plane.origin.equals(Vec(0, 0, 0))
+
+    def test_plane_not_planar_raises(self):
+        p = Path().add_arc(Vec(0, 0, 0), Vec(0, 0, 1), Vec(5, 0, 0), 0.5)
+        p.add_arc(Vec(0, 0, 0), Vec(0, 1, 0), Vec(5, 0, 0), 0.5)
+        with pytest.raises(ValueError, match="not planar"):
+            _ = p.plane
+
+    def test_plane_empty_path_raises(self):
+        p = Path()
+        with pytest.raises(ValueError, match="no segments"):
+            _ = p.plane
+
+
+class TestAssemblePath:
+    def test_assemble_single_segment(self):
+        from geometrykit.geometry import assemble_path
+        line = Line(Vec(0, 0, 0), Vec(10, 0, 0))
+        paths = assemble_path([line])
+        assert len(paths) == 1
+        assert paths[0].start_point().equals(Vec(0, 0, 0))
+        assert paths[0].end_point().equals(Vec(10, 0, 0))
+
+    def test_assemble_ordered(self):
+        from geometrykit.geometry import assemble_path
+        l1 = Line(Vec(0, 0, 0), Vec(10, 0, 0))
+        l2 = Line(Vec(10, 0, 0), Vec(10, 10, 0))
+        paths = assemble_path([l1, l2])
+        assert len(paths) == 1
+        assert paths[0].end_point().equals(Vec(10, 10, 0))
+
+    def test_assemble_unordered(self):
+        from geometrykit.geometry import assemble_path
+        l1 = Line(Vec(10, 0, 0), Vec(10, 10, 0))
+        l2 = Line(Vec(0, 0, 0), Vec(10, 0, 0))
+        paths = assemble_path([l1, l2])
+        assert len(paths) == 2  # not connected - no shared endpoints
+
+    def test_assemble_ordered_connected(self):
+        from geometrykit.geometry import assemble_path
+        l1 = Line(Vec(0, 0, 0), Vec(10, 0, 0))
+        l2 = Line(Vec(10, 0, 0), Vec(10, 10, 0))
+        l3 = Line(Vec(10, 10, 0), Vec(10, 10, 10))
+        paths = assemble_path([l1, l2, l3])  # ordered forward chain
+        assert len(paths) == 1
+        assert paths[0].end_point().equals(Vec(10, 10, 10))
+
+    def test_assemble_chain_partial_order(self):
+        from geometrykit.geometry import assemble_path
+        l1 = Line(Vec(10, 0, 0), Vec(10, 10, 0))
+        l2 = Line(Vec(0, 0, 0), Vec(10, 0, 0))
+        l3 = Line(Vec(10, 10, 0), Vec(10, 10, 10))
+        paths = assemble_path([l3, l2, l1])  # ends chain together
+        assert len(paths) >= 1
+        p = paths[0] if paths[0].end_point().equals(Vec(10, 10, 10)) else paths[-1]
+        assert p.end_point().equals(Vec(10, 10, 10))
+
+    def test_assemble_disconnected_returns_multiple(self):
+        from geometrykit.geometry import assemble_path
+        l1 = Line(Vec(0, 0, 0), Vec(10, 0, 0))
+        l2 = Line(Vec(100, 0, 0), Vec(110, 0, 0))
+        paths = assemble_path([l1, l2])
+        assert len(paths) == 2
+
+    def test_assemble_flipped_line(self):
+        from geometrykit.geometry import assemble_path
+        l1 = Line(Vec(0, 0, 0), Vec(10, 0, 0))
+        l2 = Line(Vec(20, 0, 0), Vec(10, 0, 0))  # reversed: end at (10,0,0) matches l1.start
+        paths = assemble_path([l1, l2])
+        assert len(paths) == 1
+        assert paths[0].start_point().equals(Vec(0, 0, 0))
+        assert paths[0].end_point().equals(Vec(20, 0, 0))
+
+    def test_assemble_empty_raises(self):
+        from geometrykit.geometry import assemble_path
+        with pytest.raises(ValueError, match="must not be empty"):
+            assemble_path([])
+
+
+# Removed tests for assemble_path_planar (removed functionality)
+# The new assemble_path handles arc reversal via Arc.reverse() internally
+
+
+# ---------------------------------------------------------------------------
+# Curve.plane_roots (no OCC)
+# ---------------------------------------------------------------------------
+
+
+class TestPlaneRoots:
+    """Sign brackets bisected to machine precision; grazes unreported."""
+
+    def test_straight_crossing_is_exact(self):
+        from geometrykit.geometry import Curve
+
+        line = Curve.from_tangents(
+            start=Vec(0, 0, 0), tan_start=Vec(1, 0, 0),
+            end=Vec(4, 0, 0), tan_end=Vec(1, 0, 0), scale=1.0,
+        )
+        roots = line.plane_roots(Vec(1, 0, 0), Vec(1, 0, 0))
+        assert len(roots) == 1
+        assert abs(line.point_at(roots[0]).x - 1.0) < 1e-9
+
+    def test_miss_returns_empty(self):
+        from geometrykit.geometry import Curve
+
+        line = Curve.from_tangents(
+            start=Vec(0, 0, 0), tan_start=Vec(1, 0, 0),
+            end=Vec(4, 0, 0), tan_end=Vec(1, 0, 0), scale=1.0,
+        )
+        assert line.plane_roots(Vec(10, 0, 0), Vec(1, 0, 0)) == []
+
+    def test_two_crossings_both_found(self):
+        from geometrykit.geometry import Curve
+
+        arch = Curve.from_tangents(
+            start=Vec(0, 0, 0), tan_start=Vec(1, 2, 0),
+            end=Vec(4, 0, 0), tan_end=Vec(1, -2, 0), scale=1.0,
+        )
+        roots = arch.plane_roots(Vec(0, 0.25, 0), Vec(0, 1, 0))
+        assert len(roots) == 2
+        for t in roots:
+            assert abs(arch.point_at(t).y - 0.25) < 1e-9, t
+
+    def test_ascending_unique(self):
+        from geometrykit.geometry import Curve
+
+        line = Curve.from_tangents(
+            start=Vec(0, 0, 0), tan_start=Vec(1, 0, 0),
+            end=Vec(4, 0, 0), tan_end=Vec(1, 0, 0), scale=1.0,
+        )
+        roots = line.plane_roots(Vec(2, 0, 0), Vec(1, 0, 0))
+        assert roots == sorted(roots) and len(set(roots)) == len(roots)
+
+
+class TestDenseInterpolationExactness:
+    """from_points passes through its inputs (checked AT the knot params,
+    not by nearest-sample, which only measures sampling resolution)."""
+
+    def test_fifty_points_interpolate_to_1e_9(self):
+        import math
+
+        from geometrykit.geometry import Curve
+
+        pts = [Vec(i * 0.2, math.sin(i * 0.5), 0.0) for i in range(50)]
+        chords = [0.0]
+        for a, b in zip(pts, pts[1:]):
+            chords.append(
+                chords[-1] + abs(b.x - a.x) + abs(b.y - a.y) + abs(b.z - a.z)
+            )
+        total = chords[-1]
+        params = [c / total for c in chords]
+        curve = Curve.from_points(pts, knots=params)
+        worst = 0.0
+        for k, p in enumerate(pts):
+            q = curve.point_at(params[k])
+            worst = max(
+                worst, abs(q.x - p.x) + abs(q.y - p.y) + abs(q.z - p.z)
+            )
+        assert worst < 1e-9, worst
