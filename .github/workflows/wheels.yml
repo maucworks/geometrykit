@@ -87,9 +87,15 @@ jobs:
         with:
           path: allwheels
       - name: Check
-        run: twine check dist/* allwheels/*/wheelhouse/*.whl
+        run: |
+          python -m pip install twine
+          # download-artifact mirrors the workspace-relative structure the
+          # artifacts were patterned from; flatten whatever came back
+          mkdir -p metadist
+          find allwheels -name "*.whl" -exec cp {} metadist/ \;
+          twine check dist/* metadist/*.whl
       - name: Upload
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: twine upload --non-interactive dist/* allwheels/*/wheelhouse/*.whl
+        run: twine upload --non-interactive dist/* metadist/*.whl
