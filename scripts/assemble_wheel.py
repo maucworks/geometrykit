@@ -85,24 +85,34 @@ def _records_root(entries: list) -> None:
 
 
 def assemble(pure: Path, so: Path, tag: str, out_dir: Path) -> Path:
-    """Inject the .so, retag, repack with a fresh RECORD (zip surgery)."""
+    """Inject the .so, retag, repack with a fresh RECORD."""
     with zipfile.ZipFile(pure) as src:
         names = src.namelist()
         record_name = next(
             n for n in names if n.endswith(".dist-info/RECORD")
         )
+        wheel_name = next(
+            n for n in names if n.endswith(".dist-info/WHEEL")
+        )
         entries: list[tuple[str, bytes]] = []
         for info in src.infolist():
-            if info.filename.endswith("/WHEEL"):
+            if info.filename == wheel_name:
                 body = src.read(info).decode()
                 body = "\n".join(
-                    ln for ln in body.splitlines() if not ln.startswith("Tag:")
+                    ln for ln in body.splitlines()
+                    if not ln.startswith("Tag:")
+                    and not ln.startswith("Root-Is-Purelib:")
                 )
-                body += f"\nTag: cp39-abi3-{tag}\n"
+                # binary content: pip maps the root to platlib on
+                # distributions that separate purelib from platlib
+                # (Debian-managed system pythons); the pure wheel's
+                # `true` does not survive the .so
+                body += f"\nRoot-Is-Purelib: false\nTag: cp39-abi3-{tag}\n"
                 entries.append((info.filename, body.encode()))
             elif info.filename != record_name:
                 entries.append((info.filename, src.read(info)))
     entries.append(("geometrykit/" + so.name, so.read_bytes()))
+    record_line = f"{record_name},,"
 
     content = [
         (name, data, hashlib.sha256(data).digest(), len(data))
@@ -120,7 +130,8 @@ def assemble(pure: Path, so: Path, tag: str, out_dir: Path) -> Path:
             f"{size}"
             for name, _data, digest, size in content
         )
-        dst.writestr(record_name, record + "\n")
+        # the spec's own row: RECORD lists itself without hash or size
+        dst.writestr(record_name, record + f"\n{record_line}\n")
     return dest
 
 
