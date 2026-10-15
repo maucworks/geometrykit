@@ -58,6 +58,15 @@ PARAMETRIZATION = "arclength"
 # should judge this one, as it did for the tangency sweep.
 LOOSE = 0
 
+# Adaptive representation: re-fit each constrained patch onto a
+# C1-segmented degree-4 net (tolerance-driven, stations held exact) before
+# export. Rows-then-fit -- the constraints are solved on the dense field
+# first, the approximation inherits them -- which is the order the
+# measurements approve (band/core 1.95x vs 2.12x tight, dev unchanged,
+# boundary 2e-14) and the eye preferred over every tight variant.
+ADAPTIVE = True
+ADAPTIVE_TOL = 1e-3
+
 # Solve the interior as an energy-minimising fill instead of taking the Coons
 # blend: the boundary ring still interpolates the boundary curves exactly, and
 # the interior is the thin-plate solution through it (simply supported). That
@@ -198,10 +207,34 @@ def main() -> None:
             spines, fields, nu=16, nv=16, tangency=TANGENCY, g2=G2, fill=FILL,
             loose=LOOSE, parametrization=PARAMETRIZATION
         )
+        if ADAPTIVE:
+            # rows-then-fit: the constrained dense field is approximated
+            # onto a C1-segmented net with the stations held exact, so the
+            # boundary contract and the station map survive; the row passes
+            # are NOT re-run on the fitted net (they concentrate bend at
+            # the boundary band there -- measured 17x).
+            from geometrykit.runtimes._npu import fit_np
+
+            surface, report = fit_np.adaptive_fit(
+                surface, degree=4, tol=ADAPTIVE_TOL,
+                stations=(params_u, params_v),
+            )
+            adaptive_suffix = (
+                f", adaptive C1d4 {report['segments'][0]}x{report['segments'][1]}"
+            )
+            print(
+                f"{name} patch re-fitted: segments {report['segments']} "
+                f"poles {surface.nu}x{surface.nv} "
+                f"sample {report['sample_worst']:.2e} "
+                f"boundary {report['boundary_worst']:.2e}"
+            )
+        else:
+            adaptive_suffix = ""
         patches.append((name, surface))
         label = "solver default" if TANGENCY is None else f"tangency {TANGENCY}"
         label += ", G2" if G2 else ", G1 only"
         label += ", plate fill" if FILL else ", Coons blend"
+        label += adaptive_suffix
         print(f"{name} patch built from the kernel ({label})")
         for edge in patch_g1.EDGE_NAMES:
             params = stations[0] if edge in ("south", "north") else stations[1]
