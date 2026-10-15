@@ -101,4 +101,7 @@ jobs:
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: twine upload --verbose --non-interactive dist/* metadist/*.whl
+        # --skip-existing makes releases idempotent: files already on
+        # PyPI (in our case, the wheels a retry raced into place) are a
+        # skip, not an error, and the sdist finally gets its turn
+        run: twine upload --verbose --skip-existing --non-interactive dist/* metadist/*.whl
