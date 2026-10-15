@@ -22,8 +22,7 @@ permissions:
 
 jobs:
   build:
-    name: wheel ${{ matrix.os }}
-    strategy:
+    name: wheel ${{ matrix.os }}    strategy:
       fail-fast: false
       matrix:
         include:
@@ -69,3 +68,34 @@ jobs:
         with:
           name: wheel-${{ matrix.os }}
           path: wip/wheelhouse/*.whl
+
+  publish:
+    name: publish to PyPI (binary matrix + pure wheel + sdist)
+    # dispatch is allowed too: it is how a release whose publish job was
+    # lost (e.g. v0.5.0) publishes retroactively, from fresh legs
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pure fallback wheel + sdist (setuptools route)
+        run: |
+          python -m pip install build
+          python -m build --sdist
+          python -m build --wheel
+      - name: Collect the built platform wheels
+        uses: actions/download-artifact@v4
+        with:
+          path: allwheels
+      - name: Check
+        run: |
+          python -m pip install twine
+          twine check dist/* allwheels/*/wheelhouse/*.whl
+      - name: Upload
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: twine upload --non-interactive dist/* allwheels/*/wheelhouse/*.whl
