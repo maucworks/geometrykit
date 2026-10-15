@@ -628,6 +628,35 @@ def _measure_corner(
     return measured
 
 
+def spine_field(edge, spine, support, oriented, params_u, params_v, towards):
+    """The constraint field of *edge*, read on *support*'s spine.
+
+    The spine is located on the support by projection, so it does not matter
+    whether the ribbon is one-sided or symmetric, nor how either is
+    parameterised. The spec carries the support and its spine as well, which
+    is what a tangency strength is scaled against. Field callables take
+    *patch* parameters (as `_field_samples` feeds them).
+    """
+    patch_params = params_u if edge in ("south", "north") else params_v
+    curve_params = edge_curve_params(oriented, edge, patch_params)
+    spec = support_constraint(support, spine, towards=towards)
+
+    def _map(field):
+        def at(t):
+            k = min(range(len(patch_params)), key=lambda m: abs(patch_params[m] - t))
+            return field(curve_params[k])
+
+        return at
+
+    return {
+        "normal": _map(spec["normal"]),
+        "slope": _map(spec["slope"]),
+        "support": support,
+        "spine": spine,
+        "curve_params": curve_params,
+    }
+
+
 def support_constraint(support, spine, towards=None, tol: float = 1e-4) -> dict:
     """A G1 field spec for one edge, carrying its support and spine.
 

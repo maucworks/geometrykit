@@ -1,3 +1,31 @@
+# Unreleased — the energy fill (M0-M8) + OCC-free pipeline
+
+- **Energy-minimising plate fill** (`patch_np.discrete_plate_fill`,
+  `linalg_np.plate_fill`): the interior is the thin-plate solution through
+  the boundary ring, not the Coons blend. Simply-supported by default;
+  clamped where slope data exists (G1 as a boundary condition: fill alone
+  leaves every edge at ~95% of the support rate); ring-2 curvature belts
+  opt-in behind `g2_in_fill` (measured a regression for flat supports, kept
+  as exact machinery). Analytic datums (`x*y`, `x**2`) reproduced to 1e-13.
+- **Adaptive constrained approximation** (`fit_np.adaptive_fit`,
+  `constrained_patch(..., adaptive=<tol>)`): rows-then-fit onto a
+  C1-segmented degree-4 net with station boundaries held exact by
+  equality elimination (1.6e-14). The user's eye judged it best of all
+  variants; the entry path reproduces the file byte-identically.
+- **Corner protocol** (`patch_g1.corner_report` with the cage datum,
+  `corner_stations=0` opt-in): adjacent-station residual 2.8e-02 -> 1.4e-12
+  at shipped density; zebra passes. Library default stays 1 (coarse
+  density needs it); the driver opts in explicitly.
+- **Public routing** (`Surface.patch(fill="energy")`): the whole continuity
+  pipeline OCC-free (pure ribbons with the spine at 0.00e+00, kernel field
+  reading, fill, rows) -- G1 1e-13 through the public route in the plain
+  venv. Legacy default (`fill=None`, the OCCT twin) unchanged.
+- **Measured table, flowing roof, driver density (nu=16):** cross-direction
+  curvature peak 5.96 (Coons/chord) -> 1.25 (M2) -> 0.165 (M3) with twin at
+  0.018; deviation from twin 0.175 -> 0.049 (M3) -> 0.022 (shipped,
+  tangency 0.75 + adaptive); boundary exactness 1e-14 throughout; G1
+  1e-13, curvature gaps <= 4e-3.
+
 # v0.3.0 — 2026-10-14
 
 - **Patch kernel P-1** (G1-constrained filling, `runtimes/_npu/patch_g1.py`):

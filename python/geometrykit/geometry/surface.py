@@ -596,11 +596,20 @@ class Surface:
         supports=None,
         tol: float = 1e-3,
         tolerance: "float | None" = None,
+        fill: "str | None" = None,
+        tangency: "float | None" = None,
+        g2: bool = False,
+        nu: int = 8,
+        nv: int = 8,
+        parametrization: str = "arclength",
+        adaptive: float = 0.0,
+        loose: int = 0,
+        corner_stations: int = 1,
     ) -> "Surface":
-        """Create a surface bounded by ≥2 curves via OCC MakeFilling.
+        """Create a surface bounded by ≥2 curves, optionally G1-constrained.
 
         Supports per‑edge **G1** (tangent) continuity against optional
-        support surfaces.  Edges are auto‑aligned to form a closed loop.
+        support surfaces.  Edges are auto-aligned to form a closed loop.
 
         Args:
             curves:      Boundary curves (≥2).
@@ -612,6 +621,28 @@ class Surface:
             tol:         3D tolerance for MakeFilling.  Higher values
                         (e.g. ``1e-2``) are faster but coarser.
             tolerance:   Deprecated alias for *tol*.
+            fill:        Which solver builds a four-curve patch: ``None``
+                        (legacy -- the OCCT twin for G1 edges, the P-0
+                        Coons blend for C0), ``"coons"`` (the P-0 blend,
+                        explicit), or ``"energy"`` (the energy-minimising
+                        plate fill with the continuity conditions as
+                        boundary conditions of the solve, rows-then-fit
+                        when adaptive is set). ``"energy"`` needs exactly
+                        four curves and is OCC-free.
+            tangency:    With ``fill="energy"``: the boundary
+                        cross-derivative's magnitude as a multiple of the
+                        support's own slope (``None`` = direction only).
+            g2:          With ``fill="energy"``: also match the support's
+                        cross-curvature, as a second pass over the G1
+                        result.
+            nu/nv:       Station counts for the fill grid.
+            parametrization: how the fill stations are spread --
+                        ``"arclength"`` (even in space, uniform knots) or
+                        ``"chord"`` (the curves' own parameterisation).
+            adaptive:    Tolerance for the adaptive re-fit (0 = off).
+            loose:       Stations of enlargement per side for the loose
+                        fill (0 = the classical fill).
+            corner_stations: stations dropped at each end of an edge.
 
         Returns:
             A new Surface.
@@ -625,13 +656,55 @@ class Surface:
         if n < 2:
             raise ValueError("patch() requires at least 2 curves")
 
-        # Route: pure position-only patches (P-0 discrete Coons, occ-free)
-        # vs continuity-constrained patches (P-1; OCCT twin until the P-1
-        # sampled cross-field kernel lands).
+        # Route: the energy fill (OCC-free kernel pipeline), the pure
+        # position-only P-0 blend, or the legacy OCCT twin.
         constraints = list(constraints) if constraints is not None else ["C0"] * n
         _needs_g1 = any(
             (c or "C0").upper() == "G1" for c in constraints
         )
+        if fill is not None and fill not in ("coons", "energy"):
+            raise ValueError(
+                f'unknown fill {fill!r}: use None (legacy), "coons" or "energy"'
+            )
+        if fill in ("coons", "energy"):
+            # Kernel path (OCC-free): the base is the Coons blend or the
+            # energy plate; G1/G2 rows apply on top when asked.
+            if n != 4:
+                raise NotImplementedError(
+                    f'fill="{fill}" supports exactly four boundary curves for now '
+                    "(n-sided chart machinery is a later increment)"
+                )
+            from geometrykit.runtimes._npu import patch_g1, patch_np
+
+            params_u, params_v, oriented = patch_np.coons_parametrization(
+                curves, nu=nu, nv=nv, tol=1e-6, parametrization=parametrization
+            )
+            towards = Vec(
+                sum(c.point_at(0.5).x for c in curves) / n,
+                sum(c.point_at(0.5).y for c in curves) / n,
+                sum(c.point_at(0.5).z for c in curves) / n,
+            )
+            fields = {}
+            for edge, spine, support, want in zip(
+                patch_g1.EDGE_NAMES, curves, supports or [None] * n, constraints
+            ):
+                if (want or "C0").upper() != "G1":
+                    continue
+                if support is None:
+                    raise ValueError(
+                        f"G1 constraint on {edge} requires a support Surface "
+                        "(the adjacent face that defines the tangent direction)."
+                    )
+                fields[edge] = patch_g1.spine_field(
+                    edge, spine, support, oriented, params_u, params_v, towards
+                )
+            surface, _corners, _stations = patch_g1.constrained_patch(
+                curves, fields, nu=nu, nv=nv, tol=1e-6, degree=3,
+                tangency=tangency, g2=g2, fill=(fill == "energy"),
+                loose=loose, corner_stations=corner_stations,
+                adaptive=adaptive, parametrization=parametrization,
+            )
+            return surface
         if not _needs_g1 and supports is None:
             if n == 4:
                 from geometrykit.runtimes._npu import patch_np
