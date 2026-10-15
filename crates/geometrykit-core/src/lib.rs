@@ -14,6 +14,7 @@
 
 pub mod basis;
 pub mod eval;
+pub mod linalg;
 
 /// Kernels crate version, kept in step with the distribution.
 pub const VERSION: &str = "0.1.0";

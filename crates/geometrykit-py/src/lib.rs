@@ -162,6 +162,44 @@ fn basis_row_grid(
     Ok((ids, vals))
 }
 
+/// Banded Cholesky over sparse rows, each row a flat `[j, v, j, v, ...]`
+/// pair list; the factor comes back row-major `[[band row 0], [1], ...]`,
+/// index-compatible with the mirror's list-of-lists. Marshalling only.
+#[pyfunction]
+fn banded_cholesky_grid(
+    rows: Vec<Vec<f64>>,
+    n: usize,
+    bandwidth: usize,
+) -> PyResult<Vec<Vec<f64>>> {
+    let parsed: Vec<Vec<(usize, f64)>> = rows
+        .iter()
+        .map(|row| {
+            (0..row.len())
+                .step_by(2)
+                .map(|k| {
+                    (
+                        row[k].max(0.0) as usize,
+                        row.get(k + 1).copied().unwrap_or(f64::NAN),
+                    )
+                })
+                .collect::<Vec<(usize, f64)>>()
+        })
+        .collect();
+    geometrykit_core::linalg::banded_cholesky(&parsed, n, bandwidth)
+        .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Banded solve with the factor from `banded_cholesky_grid`.
+#[pyfunction]
+fn banded_solve_grid(
+    factor: Vec<Vec<f64>>,
+    rhs: Vec<f64>,
+    n: usize,
+    bandwidth: usize,
+) -> PyResult<Vec<f64>> {
+    Ok(geometrykit_core::linalg::banded_solve(&factor, &rhs, n, bandwidth))
+}
+
 /// Python module bootstrap. Extension comes in as `geometrykit._rust`.
 #[pymodule]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -171,5 +209,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(eval_all_grid, m)?)?;
     m.add_function(wrap_pyfunction!(project_grid, m)?)?;
     m.add_function(wrap_pyfunction!(basis_row_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(banded_cholesky_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(banded_solve_grid, m)?)?;
     Ok(())
 }

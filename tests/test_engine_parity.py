@@ -407,3 +407,61 @@ class TestBasisRowParity:
                         ), (degree, k, rid)
                     assert list(row.items())[len(row) - 1][0] == max(ref)
 
+
+@pytest.mark.rust
+@pytest.mark.skipif(not engine.has_rust(), reason="requires geometrykit._rust")
+class TestBandedParity:
+    """Port 4: banded Cholesky + solve, mirror vs. extension, bit-for-bit."""
+
+    @staticmethod
+    def _rows(n: int) -> list:
+        rows = [{} for _ in range(n)]
+        for i in range(n):
+            rows[i][i] = rows[i].get(i, 0.0) + 2.0
+            if i + 1 < n:
+                rows[i].setdefault(i, 0.0)
+            if i + 1 < n:
+                rows[i][i + 1] = rows[i].get(i + 1, 0.0) - 1.0
+                rows[i + 1][i] = rows[i + 1].get(i, 0.0) - 1.0
+        return rows
+
+    def test_factor_and_solve_match_mirror(self):
+        from geometrykit.runtimes import dispatch
+        from geometrykit.runtimes._npu import linalg_np
+
+        n = 24
+        rows = self._rows(n)
+        bands = 2
+        f_mirror = linalg_np.banded_cholesky(rows, n, bands)
+        f_rust = dispatch.banded_cholesky(rows, n, bands)
+        for i in range(n):
+            for k in range(bands + 1):
+                assert (
+                    contract.float_to_hex(f_rust[i][k])
+                    == contract.float_to_hex(f_mirror[i][k])
+                ), (i, k)
+        rhs = [float(k % 5) - 2.0 for k in range(n)]
+        x_mirror = linalg_np.banded_solve(f_mirror, rhs, n, bands)
+        x_rust = dispatch.banded_solve(f_rust, rhs, n, bands)
+        for a, b in zip(x_mirror, x_rust):
+            assert contract.float_to_hex(a) == contract.float_to_hex(b)
+
+    def test_non_spd_raises_like_the_mirror(self):
+        from geometrykit.runtimes import dispatch
+        from geometrykit.runtimes._npu import linalg_np
+
+        rows = [{0: 0.0}]
+        with pytest.raises(ValueError, match="not positive definite"):
+            linalg_np.banded_cholesky(rows, 1, 1)
+        with pytest.raises(ValueError, match="not positive definite"):
+            dispatch.banded_cholesky(rows, 1, 1)
+
+    def test_band_overflow_raises_like_the_mirror(self):
+        from geometrykit.runtimes import dispatch
+        from geometrykit.runtimes._npu import linalg_np
+
+        rows = [{0: 2.0, 9: 1.0}]
+        for fn in (linalg_np.banded_cholesky, dispatch.banded_cholesky):
+            with pytest.raises(ValueError, match="beyond the bandwidth"):
+                fn(rows, 3, 1)
+

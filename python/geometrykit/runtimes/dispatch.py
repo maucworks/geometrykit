@@ -51,6 +51,43 @@ def basis_row_list(degree: int, uflat, stations):
     ]
 
 
+def banded_cholesky(rows, n: int, bandwidth: int):
+    """Mirror `linalg_np.banded_cholesky` under the active engine.
+
+    `rows[i]` is `{j: value}` as the mirror expects; the extension
+    marshals each row to flat pairs, and the factor comes back in the
+    mirror's own list-of-band-rows shape (same indexing).
+    """
+    accel = _rust()
+    if accel is None:
+        from geometrykit.runtimes._npu import linalg_np
+
+        return linalg_np.banded_cholesky(rows, n, bandwidth)
+    from geometrykit import _rust as _ext
+
+    flat = []
+    for row in rows:
+        pairs = []
+        for j, v in row.items():
+            pairs.extend((float(j), float(v)))
+        flat.append(pairs)
+    return _ext.banded_cholesky_grid(flat, int(n), int(bandwidth))
+
+
+def banded_solve(factor, rhs, n: int, bandwidth: int) -> list:
+    """Mirror `linalg_np.banded_solve` under the active engine."""
+    accel = _rust()
+    if accel is None:
+        from geometrykit.runtimes._npu import linalg_np
+
+        return linalg_np.banded_solve(factor, rhs, n, bandwidth)
+    from geometrykit import _rust as _ext
+
+    return list(
+        _ext.banded_solve_grid(factor, list(rhs), int(n), int(bandwidth))
+    )
+
+
 def eval_point(surf, u: float, v: float):
     """Mirror `surface_np.eval_point` under the active engine."""
     from geometrykit.runtimes._npu import surface_np

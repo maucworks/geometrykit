@@ -53,6 +53,18 @@
   configs: plain 677/0 x2, oracle 677/0. Timing, shipped front patch:
   0.682 s routed vs 0.750 s mirror (the cutover gain doubled with the
   batched rows).
+- **Phase 2 port 4: banded solvers** (`geometrykit-core::linalg`,
+  `geometrykit._rust.banded_cholesky_grid/banded_solve_grid`,
+  `dispatch.banded_cholesky/banded_solve`): `_as_band`/`banded_cholesky`
+  /`banded_solve` verbatim (same upper-band storage, same 1e-14 pivot
+  tolerance, mirror-form error messages; no production call site today
+  -- engine completeness for the contract). Parity: 24-point
+  tridiagonal factor + solve bit-for-bit, non-SPD and beyond-band
+  errors raised identical from both engines. Tests corrected along the
+  way: the mirrored lower entry belongs in row i+1 (its skipping is
+  the property being tested), and source rows stay pair-lists, not
+  dicts, through the extension. Suites: plain 686/0 x2 configs; core
+  13/13.
 - **Diagrid capability suite** (`tests/geometry/test_diagrid_capability.py`):
   the shipped pcurve-diagrid workflow as a committed gate on the
   flowing-roof network -- energy fill, two diagonal plane families at
