@@ -295,27 +295,85 @@ def weave_diagrid(surf, tracks_a: list, tracks_b: list) -> tuple:
         vs = [p[1] for p in track]
         return (min(us), max(us), min(vs), max(vs))
 
-    boxes_b = [_bbox(t) for t in tracks_b]
     # crossings: (ia, seg_a, t, ib, seg_b, w, (u, v))
-    crossings = []
-    for ia, track_a in enumerate(tracks_a):
-        box_a = _bbox(track_a)
-        for ib, track_b in enumerate(tracks_b):
-            box_b = boxes_b[ib]
-            if (box_a[1] < box_b[0] or box_b[1] < box_a[0]
-                    or box_a[3] < box_b[2] or box_b[3] < box_a[2]):
+    #
+    # Two diagonal families' track bboxes all overlap each other, so the
+    # track-level short circuit alone leaves ~segments(A)*segments(B)
+    # candidate pairs (~4.6M python touches on the shipped diagrid,
+    # measured 845 ms in the weave). Index the B segments on a 2D bucket
+    # grid instead: each A segment only tests the B segments whose
+    # bounding boxes share a cell — bounded by the segments' own size,
+    # not by the domain.
+    _CELL = 0.05
+
+    def _cells(seg):
+        us = [min(p[0], q[0]), max(p[0], q[0])]
+        vs = [min(p[1], q[1]), max(p[1], q[1])]
+        if us[1] - us[0] >= _CELL or vs[1] - vs[0] >= _CELL:
+            return None  # outlier-wide segment: callers fall back
+        return [
+            (cx, cy)
+            for cx in range(int(us[0] / _CELL), int(us[1] / _CELL) + 1)
+            for cy in range(int(vs[0] / _CELL), int(vs[1] / _CELL) + 1)
+        ]
+
+    index_b: dict = {}
+    wide_b = []  # segments the bucket grid cannot bound tightly
+    for ib, track_b in enumerate(tracks_b):
+        for kb in range(len(track_b) - 1):
+            p, q = track_b[kb], track_b[kb + 1]
+            cells = _cells((p, q))
+            if cells is None:
+                wide_b.append((ib, kb, p, q))
                 continue
-            for ka in range(len(track_a) - 1):
-                p, q = track_a[ka], track_a[ka + 1]
-                for kb in range(len(track_b) - 1):
-                    r, s_ = track_b[kb], track_b[kb + 1]
+            for cell in cells:
+                index_b.setdefault(cell, []).append((ib, kb, p, q))
+
+    touching = {}
+
+    def _test_a(ia, ka, p, q):
+        us = (min(p[0], q[0]), max(p[0], q[0]))
+        vs = (min(p[1], q[1]), max(p[1], q[1]))
+        seen: set = set()
+        # A segment's own cell span may itself exceed _CELL at cut
+        # entries; iterate the box anyway (worst case the old cost on
+        # that one segment).
+        for cx in range(int(us[0] / _CELL), int(us[1] / _CELL) + 1):
+            for cy in range(int(vs[0] / _CELL), int(vs[1] / _CELL) + 1):
+                for ib, kb, r, s_ in index_b.get((cx, cy), ()):
+                    if (ib, kb) in seen:
+                        continue
+                    seen.add((ib, kb))
                     hit = _seg_intersect(p, q, r, s_)
                     if hit is None:
                         continue
                     t, _w = hit
                     u = p[0] + t * (q[0] - p[0])
                     v = p[1] + t * (q[1] - p[1])
-                    crossings.append((ia, ka, ib, kb, (u, v)))
+                    touching.setdefault(ia, {}).setdefault(ka, []).append(
+                        (ib, kb, (u, v))
+                    )
+        for ib, kb, r, s_ in wide_b:
+            hit = _seg_intersect(p, q, r, s_)
+            if hit is None:
+                continue
+            t, _w = hit
+            u = p[0] + t * (q[0] - p[0])
+            v = p[1] + t * (q[1] - p[1])
+            touching.setdefault(ia, {}).setdefault(ka, []).append(
+                (ib, kb, (u, v))
+            )
+
+    for ia, track_a in enumerate(tracks_a):
+        for ka in range(len(track_a) - 1):
+            p, q = track_a[ka], track_a[ka + 1]
+            _test_a(ia, ka, p, q)
+
+    crossings = []
+    for ia, per_ka in touching.items():
+        for ka, hits in per_ka.items():
+            for ib, kb, (u, v) in hits:
+                crossings.append((ia, ka, ib, kb, (u, v)))
 
     # feed back into the tracks, keeping order (later insertions first
     # so indices stay valid)
@@ -367,16 +425,34 @@ def weave_diagrid(surf, tracks_a: list, tracks_b: list) -> tuple:
 
     def _interpolate(vecs):
         from geometrykit.geometry.primitives import Vec as _V
+        from geometrykit.runtimes import dispatch
 
         vecs = [_V(*q) for q in vecs]
         # free ends: samples lie exactly on the surface, so the plain
         # chord-parameterised interpolation stays on it (measured 4e-07
         # off-surface on a 123-sample woven chain); end-tangent clamps --
         # unit or chord-scaled -- whip the end spans (measured 6e-03).
+        # Assembly mirrors Curve.from_points exactly (degree clamp +
+        # constructor fields), with the engine dispatch underneath.
+        degree = max(1, min(3, len(vecs) - 1))
         try:
-            return _Curve.from_points(vecs)
-        except RuntimeError:
-            return _Curve.from_points(vecs, degree=1)
+            cpts, knots, mults = dispatch.interpolate(vecs, degree=degree)
+            return _Curve(
+                control_points=[_V(*c) for c in cpts],
+                knots=knots,
+                multiplicities=mults,
+                degree=degree,
+                closed=False,
+            )
+        except (ValueError, RuntimeError):
+            cpts, knots, mults = dispatch.interpolate(vecs, degree=1)
+            return _Curve(
+                control_points=[_V(*c) for c in cpts],
+                knots=knots,
+                multiplicities=mults,
+                degree=1,
+                closed=False,
+            )
 
     curves_a = [_interpolate(t) for t in tracks_a]
     curves_b = [_interpolate(t) for t in tracks_b]

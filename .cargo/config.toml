@@ -1,0 +1,9 @@
+# Generated with the assistance of an AI coding tool.
+# The `-py` crate is an extension module (abi3 + extension-module): Python
+# symbols resolve at import time, not link time. Plain `cargo build/test`
+# needs the linker told to leave them undefined (maturin does this itself).
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
+
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))']
+rustflags = ["-C", "link-arg=-Wl,--allow-shlib-undefined"]

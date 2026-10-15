@@ -7,10 +7,19 @@ import pytest
 from geometrykit import engine
 
 
-def test_defaults_to_numpy_mirror():
-    # the accelerator wheel is not part of this distribution yet (M6+)
-    assert engine.engine() == "npu"
-    assert engine.has_rust() is False
+def test_defaults_to_probed_engine():
+    import os
+
+    # no explicit override: the extension decides. Both outcomes are
+    # valid scaffold states — mirror-only venvs and accelerator-built ones.
+    override = os.environ.get("GEOMETRYKIT_ENGINE", "auto").strip().lower()
+    if override in ("npu", "python", "mirror"):
+        assert engine.engine() == "npu"
+    elif override == "rust":
+        if engine.has_rust():
+            assert engine.engine() == "rust"
+    else:
+        assert engine.engine() == ("rust" if engine.has_rust() else "npu")
 
 
 def test_explicit_npu_override():
@@ -34,8 +43,11 @@ def test_rust_override_without_extension_raises():
     old = os.environ.get("GEOMETRYKIT_ENGINE")
     os.environ["GEOMETRYKIT_ENGINE"] = "rust"
     try:
-        with pytest.raises(RuntimeError, match="not importable"):
-            engine.engine()
+        if engine.has_rust():
+            assert engine.engine() == "rust"
+        else:
+            with pytest.raises(RuntimeError, match="not importable"):
+                engine.engine()
     finally:
         if old is None:
             del os.environ["GEOMETRYKIT_ENGINE"]

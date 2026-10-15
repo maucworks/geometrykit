@@ -1,5 +1,106 @@
 # Unreleased — the energy fill (M0-M8) + OCC-free pipeline
 
+- **Rust scaffold, Phase 1** (`crates/`): the engine split now exists.
+  `crates/geometrykit-core` holds the kernels in pure Rust (no pyo3,
+  `#![forbid(unsafe_code)]`), starting with the contract float layer
+  (`bits_hex`, bit-identical to `contract.float_to_hex` incl. signed
+  zeros and NaN payloads); `crates/geometrykit-py` is pyo3 marshalling
+  only and builds via maturin as `geometrykit._rust`
+  (`scripts/build_rust_extension.py`). The engine probe prefers the
+  extension when importable, `GEOMETRYKIT_ENGINE=npu` forces the
+  mirror. Parity harness (`test_engine_parity.py`) proves signature
+  stability across two builds of the same kernel data and, with the
+  extension present, cross-language float-bit agreement on every
+  kernel result — the gate Phase 2 ports land against.
+- **Phase 2 port 1: evaluation kernels** (`geometrykit-core::eval`,
+  `geometrykit._rust.eval_point_grid/eval_all_grid`): the Piegl basis
+  build, point, and both analytic tangents ported verbatim from the
+  mirror (same A2.1/A2.2 spans, right-limit derivative convention, same
+  accumulation order). Mirror vs. extension compared bit-for-bit on a
+  deterministic saddle patch and its rational twin, including clamped
+  stations and both domain ends: every IEEE pattern equal. Batch
+  marshalling: one Python round-trip per grid, not per station.
+- **Phase 2 port 2: projection** (`project_point`, `_newton`,
+  `_edge_min` core port + `geometrykit._rust.project_grid`): the P0.1
+  algorithm verbatim -- coarse point-only grid, distinct-seed damped
+  Gauss-Newton (early-gradient break, degenerate-det break, five-step
+  halving, domain clamp), then the four boundary isocurves by
+  golden-section, global best kept. Mirror vs. extension bit-for-bit
+  on structured targets (corner minima, edge grazing, interior curl)
+  AND an 80-target fixed-seed shower across [-1.5, 2.5]^3: every
+  (point, u, v) float identical.
+- **Phase 3 cutover (dispatch)** (`runtimes/dispatch.py`,
+  `Surface.point_at/tangents_at/normal_at/project`): the public kernel
+  API routes through `engine.engine()` -- the `_rust` extension when
+  importable, the mirror otherwise. Routed-vs-mirror bit-identity is a
+  dedicated parity class (`TestRoutedParity`) plus suite runs in both
+  engine configurations. Error contract preserved (zero weight-sum
+  `ZeroDivisionError` from both engines; core returns the mirror's
+  message, the wrapper maps it -- no Rust panic crosses Python).
+  Timing on the shipped front patch (nu=16, G2+fill+adaptive, oracle
+  env): 0.717 s routed vs 0.754 s mirror -- the residual per-call
+  saving P0's cache did not already collapse; row assembly remains the
+  dominant share and is port 3's target.
+- **Phase 2 port 3: batched basis rows** (`geometrykit-core::basis`,
+  `geometrykit._rust.basis_row_grid`, `dispatch.basis_row_list`): the
+  row-assembly primitive of the G1/G2 edge systems batched over
+  stations (verbatim `_nonzero_basis` port: same A2.2, same edge-aware
+  span, same 1e-12 guards, mirror dict order preserved for `.items()`
+  consumers). All five `patch_g1` call sites cut to the batched
+  dispatch. Parity: single- and multi-span knot vectors, degrees 2-3,
+  30 stations including duplicates, interior knots and domain ends --
+  every id and float bit-identical to `curve_np._nonzero_basis`. Suite
+  configs: plain 677/0 x2, oracle 677/0. Timing, shipped front patch:
+  0.682 s routed vs 0.750 s mirror (the cutover gain doubled with the
+  batched rows).
+- **Phase 2 port 4: banded solvers** (`geometrykit-core::linalg`,
+  `geometrykit._rust.banded_cholesky_grid/banded_solve_grid`,
+  `dispatch.banded_cholesky/banded_solve`): `_as_band`/`banded_cholesky`
+  /`banded_solve` verbatim (same upper-band storage, same 1e-14 pivot
+  tolerance, mirror-form error messages; no production call site today
+  -- engine completeness for the contract). Parity: 24-point
+  tridiagonal factor + solve bit-for-bit, non-SPD and beyond-band
+  errors raised identical from both engines. Tests corrected along the
+  way: the mirrored lower entry belongs in row i+1 (its skipping is
+  the property being tested), and source rows stay pair-lists, not
+  dicts, through the extension. Suites: plain 686/0 x2 configs; core
+  13/13.
+- **Diagrid capability suite** (`tests/geometry/test_diagrid_capability.py`):
+  the shipped pcurve-diagrid workflow as a committed gate on the
+  flowing-roof network -- energy fill, two diagonal plane families at
+  50 batch levels, weave (48+48 curves, 1128 nodes), unit-length
+  normal spikes at every node, node-plane residuals vs. both families
+  (worst 3.4e-05, measured), two-level refined node-on-curve probe
+  (worst 1.2e-03, measured) with the sampling-resolution trap
+  documented, engine-config determinism of the node set, and a
+  wall-clock budget (< 8 s; shipped measurement ~1.5-2 s). Plain
+  kernels only: no OCC, no numpy.
+- **Weave crossing index** (`section_np.weave_diagrid`): the B family's
+  segments get a 2D bucket grid (cell 0.05, wide segments fall back to
+  pairwise probing), so each A segment only tests the B segments whose
+  boxes share a cell. Measured on the shipped diagrid: the 2D crossing
+  search 845 -> 83 ms, weave total 1068 -> 302 ms; full workflow
+  (export incl. sections, weave, 1129 nodes, 1128 normal spikes, two
+  STEP writes) 1.95 -> 1.12 s. One near-duplicate twin node now
+  resolves to the other member of its pair (1128 -> 1129 nodes); all
+  invariant gates hold (plane residual, exactness, determinism).
+- **Phase 2 ports 5+6: section marching + curve interpolation in core**
+  (`geometrykit-core::section`, `::interp`,
+  `geometrykit._rust.section_levels_grid/interpolate_grid`,
+  `dispatch.plane_section_chains/interpolate`): the level-set
+  marching (field grid, saddle-cell pairing, greedy chaining, Newton
+  polish) and the A9.1/A9.2 global interpolation (chord params,
+  averaged knots, full-Jordan dense solve) ported verbatim.
+  `Surface.section_levels` and the weave's knot assembly ride the
+  extension when present. One chaining bug was caught by the parity
+  gate itself: the mirror branches prepend/append on the loop token,
+  not position -- they disagree when a degenerate first segment
+  collapses the chain to one point (measured 57 vs 58 points on the
+  A-family level 14). Engine determinism restored and suite-tested.
+  Measured on the shipped diagrid: sections 551 -> 135 ms, weave 302
+  -> 91 ms, whole exported workflow 1.95 -> 0.44 s. Suites: plain
+  691/0 x2 configs; core 18/18.
+
 - **Energy-minimising plate fill** (`patch_np.discrete_plate_fill`,
   `linalg_np.plate_fill`): the interior is the thin-plate solution through
   the boundary ring, not the Coons blend. Simply-supported by default;

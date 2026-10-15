@@ -69,7 +69,7 @@ from typing import Sequence
 
 from geometrykit.cage import CoordinateSystem, Corner
 from geometrykit.geometry.primitives import Vec
-from geometrykit.runtimes._npu.curve_np import _nonzero_basis
+from geometrykit.runtimes import dispatch
 from geometrykit.runtimes._npu.patch_np import (
     coons_parametrization,
     discrete_coons_patch,
@@ -816,11 +816,15 @@ def solve_g1_constraints(
             factor = (qv / span_v_lo) if low else (qv / span_v_hi)
             inner_row = 1 if low else n_v - 2
             outer_row = 0 if low else n_v - 1
+            _rows_u = dispatch.basis_row_list(
+                qu, flat_u, [t for t, _n in samples]
+            )
+            _bases_u = {t: r for (t, _n), r in zip(samples, _rows_u)}
             add_edge_rows(
                 samples,
                 lambda t: [
                     ((i, inner_row), n_i)
-                    for i, n_i in _nonzero_basis(t, qu, flat_u).items()
+                    for i, n_i in _bases_u[t].items()
                     if 0 <= i < n_u
                 ],
                 factor,
@@ -835,11 +839,15 @@ def solve_g1_constraints(
             factor = (qu / span_u_lo) if low else (qu / span_u_hi)
             inner_col = 1 if low else n_u - 2
             outer_col = 0 if low else n_u - 1
+            _rows_v = dispatch.basis_row_list(
+                qv, flat_v, [t for t, _n in samples]
+            )
+            _bases_v = {t: r for (t, _n), r in zip(samples, _rows_v)}
             add_edge_rows(
                 samples,
                 lambda t: [
                     ((inner_col, j), n_j)
-                    for j, n_j in _nonzero_basis(t, qv, flat_v).items()
+                    for j, n_j in _bases_v[t].items()
                     if 0 <= j < n_v
                 ],
                 factor,
@@ -1022,10 +1030,13 @@ def _refine_g2(
             factor = (qv / span_v_lo) if low else (qv / span_v_hi)
             inner_row = 1 if low else n_v - 2
             outer_row = 0 if low else n_v - 1
-            for t, normal in samples:
+            _rows_u = dispatch.basis_row_list(
+                qu, flat_u, [t for t, _n in samples]
+            )
+            for (t, normal), _row in zip(samples, _rows_u):
                 coefs = {}
                 residual = 0.0
-                for i, n_i in _nonzero_basis(t, qu, flat_u).items():
+                for i, n_i in _row.items():
                     if not 0 <= i < n_u:
                         continue
                     inner = net[i][inner_row]
@@ -1049,10 +1060,13 @@ def _refine_g2(
             factor = (qu / span_u_lo) if low else (qu / span_u_hi)
             inner_col = 1 if low else n_u - 2
             outer_col = 0 if low else n_u - 1
-            for t, normal in samples:
+            _rows_v = dispatch.basis_row_list(
+                qv, flat_v, [t for t, _n in samples]
+            )
+            for (t, normal), _row in zip(samples, _rows_v):
                 coefs = {}
                 residual = 0.0
-                for j, n_j in _nonzero_basis(t, qv, flat_v).items():
+                for j, n_j in _row.items():
                     if not 0 <= j < n_v:
                         continue
                     inner = net[inner_col][j]
@@ -1100,8 +1114,11 @@ def _refine_g2(
         degree_varying = qu if edge in ("south", "north") else qv
         n_varying = n_u if edge in ("south", "north") else n_v
         samples = _field_samples(field, varying, corner_stations)
+        _rows_f = dispatch.basis_row_list(
+            degree_varying, flat_varying, [t for t, _n in samples]
+        )
 
-        for t, normal in samples:
+        for (t, normal), _row2 in zip(samples, _rows_f):
             # the support's curvature and the patch's own first derivative
             patch_params = (
                 params_u if edge in ("south", "north") else params_v
@@ -1122,7 +1139,7 @@ def _refine_g2(
 
             coefs = {}
             residual = 0.0
-            for i, n_i in _nonzero_basis(t, degree_varying, flat_varying).items():
+            for i, n_i in _row2.items():
                 if not 0 <= i < n_varying:
                     continue
                 for pole_index, weight in weights.items():

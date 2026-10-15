@@ -1,0 +1,20 @@
+# This file was generated with the assistance of an AI coding tool.
+[package]
+name = "geometrykit-py"
+description = "Python bindings for geometrykit-core — marshalling only, no geometry logic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository = "https://github.com/maucworks/geometrykit"
+
+[dependencies]
+geometrykit-core = { version = "0.1.0", path = "../geometrykit-core" }
+# abi3 keeps one binary for py3.9+; extension-module drops libpython linking
+pyo3 = { version = ">=0.30.1, <0.31", features = ["extension-module", "abi3-py39"] }
+
+[lib]
+name = "_rust"
+# The wheel installs the extension as `geometrykit._rust` (see
+# pyproject.toml in this crate).
+crate-type = ["cdylib"]
+path = "src/lib.rs"
