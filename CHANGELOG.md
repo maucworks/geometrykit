@@ -75,6 +75,15 @@
   documented, engine-config determinism of the node set, and a
   wall-clock budget (< 8 s; shipped measurement ~1.5-2 s). Plain
   kernels only: no OCC, no numpy.
+- **Weave crossing index** (`section_np.weave_diagrid`): the B family's
+  segments get a 2D bucket grid (cell 0.05, wide segments fall back to
+  pairwise probing), so each A segment only tests the B segments whose
+  boxes share a cell. Measured on the shipped diagrid: the 2D crossing
+  search 845 -> 83 ms, weave total 1068 -> 302 ms; full workflow
+  (export incl. sections, weave, 1129 nodes, 1128normal spikes, two
+  STEP writes) 1.95 -> 1.12 s. One near-duplicate twin node now
+  resolves to the other member of its pair (1128 -> 1129 nodes); all
+  invariant gates hold (plane residual, exactness, determinism).
 
 - **Energy-minimising plate fill** (`patch_np.discrete_plate_fill`,
   `linalg_np.plate_fill`): the interior is the thin-plate solution through
