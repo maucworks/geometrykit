@@ -226,6 +226,39 @@ class Surface:
                 cache[key] = hit
         return hit
 
+    def section(self, plane, nu: int = 48, nv: int = 48) -> "List[CurveOnSurface]":
+        """Intersect with a plane → section curves with pcurves (no OCC).
+
+        Marches the (u, v) domain for sign changes of the plane distance,
+        polishes crossings by Newton along the gradient, chains them, and
+        interpolates each chain. Every returned curve carries its
+        parameter track (`uv`), so the section is usable as exact pcurve
+        input (trimming, export) without re-projection.
+
+        Args:
+            plane: a `Plane` (origin + z_axis normal).
+            nu/nv: marching grid density in (u, v).
+        """
+        from geometrykit.geometry.curve import Curve as _Curve
+        from geometrykit.runtimes._npu import section_np
+
+        n = plane.z_axis
+        chains = section_np.section_plane(
+            self, (plane.origin.x, plane.origin.y, plane.origin.z),
+            (n.x, n.y, n.z), nu=nu, nv=nv,
+        )
+        out = []
+        for points, uvs in chains:
+            vecs = [Vec(*p) for p in points]
+            try:
+                curve = _Curve.from_points(vecs)
+            except RuntimeError:
+                # collinear (or otherwise degenerate) runs make the cubic
+                # system singular; a degree-1 run through them is exact
+                curve = _Curve.from_points(vecs, degree=1)
+            out.append(CurveOnSurface(curve=curve, uv=list(uvs), surface=self))
+        return out
+
     def to_mesh_dict(
         self,
         nu: int = 20,
@@ -1272,6 +1305,23 @@ def occ_trim_loops(surf: Surface, samples: int = 64) -> "List[List[tuple[float, 
         loops.append(loop)
         exp.Next()
     return loops or fallback
+
+
+@dataclass
+class CurveOnSurface:
+    """A curve lying on a surface, carrying its parameter track (pcurve).
+
+    `curve` is the 3D kernel curve (interpolated through the section or
+    sampling points); `uv` is the index-aligned parameter track -- the
+    pcurve -- so `surface.point_at(*uv[k])` reproduces `points[k]`
+    exactly (evaluation, not interpolation); `surface` is the host.
+    The 3D curve agrees with the track up to the interpolation error,
+    which the section tests measure.
+    """
+
+    curve: Any
+    uv: List[tuple]
+    surface: Any
 
 
 def occ_intersect_plane(surf: Surface, plane: "Plane") -> List["Curve"]:
