@@ -6,7 +6,9 @@ name: tests
 
 on:
   push:
-    branches: ["master", "feature/**"]
+    branches:
+      - master          # feature-branch pushes run nothing; their PR
+      - release/**      # run covers the head state
   pull_request:
 
 permissions:

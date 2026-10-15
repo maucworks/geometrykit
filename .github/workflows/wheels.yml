@@ -11,8 +11,16 @@ name: wheels
 
 on:
   push:
-    branches: ["master", "feature/**"]
+    branches:
+      - master          # feature-branch pushes run nothing; the PR's
+      - release/**      # own run already covers that head state
   pull_request:
+    paths:
+      - "crates/**"
+      - "scripts/assemble_wheel.py"
+      - "scripts/build_rust_extension.py"
+      - "pyproject.toml"
+      - ".github/workflows/wheels.yml"
   release:
     types: [published]
   workflow_dispatch:
