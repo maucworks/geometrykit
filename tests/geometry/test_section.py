@@ -157,3 +157,42 @@ class TestAgainstOccSection:
             best = min(abs(p - q) for q in their_pts)
             worst = max(worst, best)
         assert worst < 5e-2, worst
+
+
+class TestSectionLevels:
+    """One field evaluation, many parallel slices -- self-consistent."""
+
+    @staticmethod
+    def _fill():
+        from geometrykit.runtimes._npu import patch_np
+
+        field, _c = patch_np.discrete_plate_fill(
+            _network(), nu=12, nv=12, parametrization="arclength"
+        )
+        return field
+
+    def test_levels_match_repeated_sections(self):
+        field = self._fill()
+        base = Plane(origin=Vec(0, 0, 0), x_axis=Vec(1, 0, 0), y_axis=Vec(0, 0, -1))
+        offsets = [1.0, 3.0, 5.0, 7.0, 9.0, 11.0]
+        batches = field.section_levels(base, offsets)
+        assert len(batches) == len(offsets)
+        for offset, curves in zip(offsets, batches):
+            single = field.section(
+                Plane(
+                    origin=Vec(0, offset, 0),
+                    x_axis=Vec(1, 0, 0),
+                    y_axis=Vec(0, 0, -1),
+                )
+            )
+            assert len(curves) == len(single), (offset, len(curves), len(single))
+            for a, b in zip(curves, single):
+                assert len(a.uv) == len(b.uv), offset
+                for (ua, va), (ub, vb) in zip(a.uv, b.uv):
+                    assert abs(ua - ub) + abs(va - vb) < 1e-9, offset
+
+    def test_miss_gives_empty_list(self):
+        field = self._fill()
+        base = Plane(origin=Vec(0, 0, 0), x_axis=Vec(1, 0, 0), y_axis=Vec(0, 0, -1))
+        batches = field.section_levels(base, [50.0])
+        assert batches == [[]]

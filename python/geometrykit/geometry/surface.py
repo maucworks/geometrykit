@@ -259,6 +259,35 @@ class Surface:
             out.append(CurveOnSurface(curve=curve, uv=list(uvs), surface=self))
         return out
 
+    def section_levels(self, plane, offsets: Sequence[float],
+                       nu: int = 48, nv: int = 48) -> list:
+        """Parallel sections: one field evaluation for many offsets.
+
+        Same plane normal, several offsets along it -- the configurator's
+        slice workload. Returns one `CurveOnSurface` list per offset, in
+        order; offsets missing the surface give empty lists.
+        """
+        from geometrykit.geometry.curve import Curve as _Curve
+        from geometrykit.runtimes._npu import section_np
+
+        n = plane.z_axis
+        batches = section_np.section_levels(
+            self, (plane.origin.x, plane.origin.y, plane.origin.z),
+            (n.x, n.y, n.z), list(offsets), nu=nu, nv=nv,
+        )
+        out = []
+        for chains in batches:
+            curves = []
+            for points, uvs in chains:
+                vecs = [Vec(*p) for p in points]
+                try:
+                    curve = _Curve.from_points(vecs)
+                except RuntimeError:
+                    curve = _Curve.from_points(vecs, degree=1)
+                curves.append(CurveOnSurface(curve=curve, uv=list(uvs), surface=self))
+            out.append(curves)
+        return out
+
     def to_mesh_dict(
         self,
         nu: int = 20,
