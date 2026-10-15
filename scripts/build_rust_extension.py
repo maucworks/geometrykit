@@ -65,9 +65,9 @@ def main() -> int:
 
     pkg_dir = Path(geometrykit.__file__).resolve().parent
     with zipfile.ZipFile(wheels[-1]) as zf:
-        libs = [n for n in zf.namelist() if n.endswith(".so")]
+        libs = [n for n in zf.namelist() if n.endswith((".so", ".pyd"))]
         if not libs:
-            print(f"{wheels[-1]} contains no .so", file=sys.stderr)
+            print(f"{wheels[-1]} contains no extension module", file=sys.stderr)
             return 2
         target = pkg_dir / libs[0].split("/")[-1]
         with zf.open(libs[0]) as src, open(target, "wb") as dst:

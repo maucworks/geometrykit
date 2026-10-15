@@ -14,3 +14,6 @@ license = "LGPL-3.0-or-later"
 
 [tool.maturin]
 module-name = "geometrykit._rust"
+# mixed layout: the wheel carries the full `geometrykit` python package
+# from the repo's python/ tree (paths are relative to this crate)
+python-source = "../../python"

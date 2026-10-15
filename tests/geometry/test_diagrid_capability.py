@@ -25,6 +25,7 @@ import math
 import os
 import time
 
+import pytest
 from geometrykit.geometry import Curve
 from geometrykit.geometry.primitives import Plane, Vec
 from geometrykit.runtimes._npu import patch_np, section_np
@@ -194,6 +195,10 @@ class TestDiagridCapability:
 
     def test_engine_determinism(self):
         """The node set is bit-stable under both engine configurations."""
+        from geometrykit import engine as engine_mod
+
+        if not engine_mod.has_rust():
+            pytest.skip("needs the accelerator: both runs would be mirror")
         engine_lit = os.environ.get("GEOMETRYKIT_ENGINE")
         try:
             os.environ["GEOMETRYKIT_ENGINE"] = "npu"
