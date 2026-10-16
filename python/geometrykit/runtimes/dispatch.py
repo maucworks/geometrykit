@@ -51,6 +51,35 @@ def basis_row_list(degree: int, uflat, stations):
     ]
 
 
+def tessellate(surf, deflection: float = 0.01, angle_tol: float = 0.5,
+               max_depth: int = 8, base_level: int = 2):
+    """Mirror `tessellate_np.adaptive_mesh` under the active engine.
+
+    Returns `(verts, normals, tris, uvs)` — flat xyz vertices, flat
+    unit normals, flat index triples, flat uv tracks. Bit-identical
+    across engines by harness.
+    """
+    from geometrykit.runtimes._npu import tessellate_np
+
+    accel = _rust()
+    if accel is None:
+        return tessellate_np.adaptive_mesh(
+            surf, deflection=deflection, angle_tol=angle_tol,
+            max_depth=max_depth, base_level=base_level,
+        )
+    from geometrykit import _rust as _ext
+
+    verts, normals, flat_tris, uvs = _ext.tessellate_grid(
+        surf, float(deflection), float(angle_tol), int(max_depth),
+        int(base_level),
+    )
+    tris = [
+        (flat_tris[k], flat_tris[k + 1], flat_tris[k + 2])
+        for k in range(0, len(flat_tris), 3)
+    ]
+    return verts, normals, tris, uvs
+
+
 def plane_section_chains(surf, origin, normal, offsets, nu: int, nv: int):
     """Mirror `section_np.section_levels` under the active engine.
 

@@ -17,6 +17,13 @@
   section chains. Measured: saddle 32 tris at 0.01 (worst 5.6e-03),
   roof fill 140 verts / 200 tris in 0.02 s (worst 7.6e-03).
   Suites: plain 700/0.
+- **Phase 2 port 7 + dispatch cutover**: the tessellator in
+  `geometrykit-core::tessellate` (`tessellate_grid` batch
+  marshalling, `dispatch.tessellate`), bit-parity proven mirror vs.
+  extension on the saddle and its rational twin. `to_mesh_dict` and
+  `preview` gain `method="adaptive"` next to the unchanged default
+  `method="occ"` (same dict shape; unknown methods raise).
+  Suites: plain 706/0, oracle 706/0.
 
 # v0.5.0 — 2026-10-16: the precompiled wheel matrix (pip installs the
 # rust engine per platform; abi3-py39 covers Rhino 8's CPython 3.9.11)
