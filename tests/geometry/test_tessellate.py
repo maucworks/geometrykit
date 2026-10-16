@@ -132,6 +132,39 @@ class TestGuards:
             tessellate_np.adaptive_mesh(surf, max_depth=1, base_level=2)
 
 
+class TestMeshDictWiring:
+    def test_adaptive_dict_shape(self):
+        surf = _saddle()
+        d = surf.to_mesh_dict(label="saddle", method="adaptive")
+        assert d["primitive"] == "triangles"
+        assert d["label"] == "saddle"
+        n = len(d["positions"]) // 3
+        assert all(0 <= i < n for i in d["indices"])
+        assert len(d["indices"]) % 3 == 0
+
+    def test_unknown_method_raises(self):
+        with pytest.raises(ValueError, match="unknown mesh method"):
+            _saddle().to_mesh_dict(method="bogus")
+
+    def test_preview_carries_method(self):
+        d = _saddle().preview(label="s", method="adaptive")
+        assert d["__type__"] == "mesh"
+        assert d["primitive"] == "triangles"
+        assert d["positions"]
+
+    def test_default_still_occ(self):
+        # default path unchanged: without pythonocc it raises, it does
+        # not silently fall back to the kernel
+        try:
+            import OCC  # noqa: F401
+        except ImportError:
+            with pytest.raises(ImportError):
+                _saddle().to_mesh_dict()
+            return
+        d = _saddle().to_mesh_dict()
+        assert d["primitive"] == "triangles"
+
+
 class TestDeterminism:
     def test_two_runs_identical_signatures(self):
         surf = _saddle()

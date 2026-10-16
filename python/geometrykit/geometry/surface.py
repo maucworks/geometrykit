@@ -276,33 +276,54 @@ class Surface:
         material: "dict | None" = None,
         deflection: "float | object" = 0.01,
         y_up: bool = True,
+        method: str = "occ",
     ) -> dict:
-        """Triangulate the surface via OCC and return a dict for 3D viewer.
-
-        Uses OCC ``BRepMesh_IncrementalMesh`` (requires ``pythonocc-core``).
+        """Triangulate the surface and return a dict for 3D viewer.
 
         Args:
-            nu:         Ignored (OCC adaptive mesh).
-            nv:         Ignored (OCC adaptive mesh).
+            nu:         Ignored (both methods determine density themselves).
+            nv:         Ignored (both methods determine density themselves).
             label:      Display name.
             material:   Visual properties (color, opacity, …).
             deflection: Mesh deflection / ``TessellationDetail``.
             y_up:       If True (default), convert coordinates to
                         Three.js/glTF Y-up: ``(x, z, -y)``.
+            method:     ``"occ"`` (default, unchanged): OCC
+                        ``BRepMesh_IncrementalMesh`` (requires
+                        ``pythonocc-core``). ``"adaptive"``: the
+                        kernel tessellator (no OCC needed; watertight,
+                        deflection-bounded, deterministic).
 
         Returns:
             A dict with ``primitive="triangles"``, ``positions``,
             ``indices``, and optional ``label``, ``material``.
         """
-        from geometrykit.geometry.surface import occ_tessellate, require_occ
+        if method not in ("occ", "adaptive"):
+            raise ValueError(f"unknown mesh method {method!r}: use 'occ' or 'adaptive'")
+        if method == "adaptive":
+            from geometrykit.runtimes._npu import tessellate_np
 
-        require_occ()
-        verts, tris = occ_tessellate(self, deflection)
-        if y_up:
-            positions = [c for v in verts for c in (v[0], v[2], -v[1])]
+            tolerance = deflection if isinstance(deflection, float) else 0.01
+            verts, _normals, tris, _uvs = tessellate_np.adaptive_mesh(
+                self, deflection=tolerance
+            )
+            if y_up:
+                positions = []
+                for k in range(0, len(verts), 3):
+                    positions.extend((verts[k], verts[k + 2], -verts[k + 1]))
+            else:
+                positions = list(verts)
+            indices = [i for tri in tris for i in tri]
         else:
-            positions = [c for v in verts for c in v]
-        indices = [i - 1 for tri in tris for i in tri]
+            from geometrykit.geometry.surface import occ_tessellate, require_occ
+
+            require_occ()
+            verts, tris = occ_tessellate(self, deflection)
+            if y_up:
+                positions = [c for v in verts for c in (v[0], v[2], -v[1])]
+            else:
+                positions = [c for v in verts for c in v]
+            indices = [i - 1 for tri in tris for i in tri]
 
         d: dict = {
             "primitive": "triangles",
@@ -320,11 +341,13 @@ class Surface:
         material: "dict | None" = None,
         deflection: "float | object" = 0.01,
         y_up: bool = True,
+        method: str = "occ",
     ) -> dict:
         """Return a ``__type__: "mesh"`` dict ready for the viewer pipeline.
 
-        Uses OCC adaptive triangulation. See ``Path.preview()`` for
-        the full material documentation.
+        ``method`` selects the tessellator: ``"occ"`` (default,
+        unchanged) or ``"adaptive"`` (kernel, no OCC needed). See
+        ``Path.preview()`` for the full material documentation.
 
         Args:
             label:      Display name.
@@ -332,13 +355,15 @@ class Surface:
             deflection: Mesh deflection / ``TessellationDetail`` (see ifckit).
             y_up:       If True (default), convert coordinates to
                         Three.js/glTF Y-up: ``(x, z, -y)``.
+            method:     ``"occ"`` or ``"adaptive"`` (see ``to_mesh_dict``).
 
         Returns:
             ``{"__type__": "mesh", "primitive": "triangles", …}``
         """
         return {
             "__type__": "mesh",
-            **self.to_mesh_dict(label=label, material=material, deflection=deflection, y_up=y_up),
+            **self.to_mesh_dict(label=label, material=material, deflection=deflection, y_up=y_up,
+                                method=method),
         }
 
     # ── IFC serialisation ──────────────────────────────────────────
