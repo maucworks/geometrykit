@@ -11,6 +11,12 @@
   few percent. The mirror function is directly testable and the
   port target; `divide()` itself keeps taking the OCC path when
   available (pinned with path-agnostic bounds).
+- **Phase 2 port 8: arc-length division in core** (`curve::Curve`
+  point eval + `arclength_divide`, `curve_divide_grid` batch
+  marshalling, `dispatch.arclength_divide`): bit-parity proven
+  mirror vs. extension on wiggle/line/kinked curves (one 1-ulp
+  association fix along the way: `(lo-1+frac)/n`, not split).
+  Suites: plain 714/0, oracle 714/0.
 
 - **Adaptive kernel tessellation** (`runtimes/_npu/tessellate_np`,
   `test_tessellate.py`): OCC-free surface meshing — a restricted
