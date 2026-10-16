@@ -2,6 +2,22 @@
 # 0.5.0 pages still described the 0.0.x name-claim placeholder). No
 # code changes.
 
+# Unreleased — adaptive kernel tessellation
+
+- **Adaptive kernel tessellation** (`runtimes/_npu/tessellate_np`,
+  `test_tessellate.py`): OCC-free surface meshing — a restricted
+  quadtree over the parameter domain (dyadic lattice stations, one
+  basis build per eval), error-split on edge-midpoint deviation vs.
+  `deflection` and corner-normal deviation vs. `angle_tol`, 2:1
+  balance, green closure fanning split edges from the evaluated
+  centroid. Every vertex is an evaluated surface point, every edge
+  shared exactly: watertight by construction, deflection measured
+  exactly through the returned uv tracks (no projection Newton in
+  the loop). Returns `(verts, normals, tris, uvs)`, house-style like
+  section chains. Measured: saddle 32 tris at 0.01 (worst 5.6e-03),
+  roof fill 140 verts / 200 tris in 0.02 s (worst 7.6e-03).
+  Suites: plain 700/0.
+
 # v0.5.0 — 2026-10-16: the precompiled wheel matrix (pip installs the
 # rust engine per platform; abi3-py39 covers Rhino 8's CPython 3.9.11)
 # plus the corrected binary-wheel metadata (Root-Is-Purelib=false, the
