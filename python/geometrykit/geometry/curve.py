@@ -451,24 +451,15 @@ class Curve:
         except ImportError:
             pass
 
-        # Kernel arc-length division (no OCC): see
-        # ``curve_np.arclength_divide`` (single implementation, also
-        # the port target).
+        # Kernel arc-length division (no OCC), engine-dispatched
+        # (mirror or the `_rust` accelerator, bit-identical).
         from geometrykit.geometry.path import PathPoint
-        from geometrykit.runtimes._npu import curve_np
+        from geometrykit.runtimes import dispatch
 
         return [
             PathPoint(t=t, point=self.point_at(t), tangent=self.tangent_at(t))
-            for t in curve_np.arclength_divide(
-                lambda t: (
-                    self.point_at(t).x,
-                    self.point_at(t).y,
-                    self.point_at(t).z,
-                ),
-                total,
-                num=num,
-                dist=dist,
-                even=even,
+            for t in dispatch.arclength_divide(
+                self, total, num=num, dist=dist, even=even
             )
         ]
 

@@ -3,6 +3,7 @@
 import math
 
 import pytest
+from geometrykit import contract, engine
 from geometrykit.geometry import Arc, Line, Path, Plane, Polyline, Vec
 
 # ---------------------------------------------------------------------------
@@ -877,3 +878,58 @@ class TestDivideArcLength:
         assert abs(pts[-1].t - 1.0) < 1e-3
         gaps = self._gaps(pts)
         assert max(gaps) / min(gaps) < 1.3
+
+
+@pytest.mark.rust
+@pytest.mark.skipif(not engine.has_rust(), reason="requires geometrykit._rust")
+class TestDivideParity:
+    """Port 8: arc-length division, mirror vs. extension, bit-for-bit."""
+
+    @staticmethod
+    def _curves():
+        from geometrykit.geometry import Curve
+
+        wiggle = Curve.from_tangents(
+            start=Vec(0, 0, 0), tan_start=Vec(1, 0, 0),
+            end=Vec(4, 1, 0), tan_end=Vec(0, 1, 0), scale=3.0,
+        )
+        line = Curve.from_tangents(
+            start=Vec(0, 0, 0), tan_start=Vec(1, 0, 0),
+            end=Vec(3, 0, 0), tan_end=Vec(1, 0, 0), scale=1.0,
+        )
+        kinked = Curve.from_points(
+            [Vec(0, 0, 0), Vec(1, 1, 0), Vec(2, 0, 0), Vec(3, 1, 0)]
+        )
+        return [wiggle, line, kinked]
+
+    @staticmethod
+    def _total(curve):
+        pts = [
+            curve.point_at(i / 199)
+            for i in range(200)
+        ]
+        return sum(
+            abs(b.x - a.x) + abs(b.y - a.y) + abs(b.z - a.z)
+            for a, b in zip(pts, pts[1:])
+        )
+
+    def test_params_bit_identical(self):
+        from geometrykit import _rust
+        from geometrykit.runtimes import dispatch
+        from geometrykit.runtimes._npu import curve_np
+
+        for curve in self._curves():
+            total = self._total(curve)
+
+            def _sample(t, _c=curve):
+                p = _c.point_at(t)
+                return (p.x, p.y, p.z)
+
+            for kwargs in ({"num": 9}, {"dist": 0.5}, {"dist": 0.5, "even": False}):
+                mine = curve_np.arclength_divide(_sample, total, **kwargs)
+                theirs = dispatch.arclength_divide(curve, total, **kwargs)
+                assert len(mine) == len(theirs)
+                for va, vb in zip(mine, theirs):
+                    assert contract.float_to_hex(va) == contract.float_to_hex(vb), (
+                        kwargs, va, vb,
+                    )
