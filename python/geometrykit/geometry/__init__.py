@@ -1,7 +1,8 @@
 # This file was generated with the assistance of an AI coding tool.
 # Ported from ifckit/ifckit/geometry/__init__.py (LGPL-3.0-or-later heritage;
-# ifckit is authored by the same copyright holder). panel_report and the
-# IFC serialisation layer (ifc_geom) stay in ifckit by design.
+# ifckit is authored by the same copyright holder). The IFC
+# serialisation layer (ifc_geom) stays in ifckit by design; the panel
+# metrics (panel) were promoted here per the geometry-ownership plan.
 
 """
 geometrykit.geometry
@@ -19,6 +20,7 @@ curve       — Curve
 surface     — Surface (eval/normal/tessellate kernels; OCC oracle-compare only)
 field       — Field, FieldPoint, trim_grid, crossing_grid, divide_trim_edge
 patterns    — quad/diamond/triangle/wave/anglebox/brick/truchet/hex/hankin cells
+panel       — FieldReport, cells_report, field_report (panel metrics)
 intersection — Intersection
 subdivision — catmull_clark, extract_patches, write_obj
 frames      — FrameField, transport_frames, fixed_ref_frames, upvector_frames
@@ -42,6 +44,7 @@ from geometrykit.geometry.frames import (
     upvector_frames,
 )
 from geometrykit.geometry.intersection import Intersection
+from geometrykit.geometry.panel import FieldReport, cells_report, field_report
 from geometrykit.geometry.path import Path, PathReport, assemble_path
 from geometrykit.geometry.patterns import (
     DiamondPattern,
@@ -122,6 +125,10 @@ __all__ = [
     "truchet_cells",
     "hankin_cells",
     "triangle_cells",
+    # panel
+    "FieldReport",
+    "cells_report",
+    "field_report",
     # subdivision
     "catmull_clark",
     "extract_patches",

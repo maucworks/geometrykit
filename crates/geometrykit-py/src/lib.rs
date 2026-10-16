@@ -255,6 +255,37 @@ fn tessellate_grid(
     Ok((mesh.verts, mesh.normals, mesh.tris, mesh.uvs))
 }
 
+/// Arc-length division over a marshalled curve: control points (flat
+/// xyz), weights (empty = non-rational), degree, knots, multiplicities
+/// plus the division spec. Returns normalized parameters in [0, 1].
+/// Marshalling only.
+#[pyfunction]
+fn curve_divide_grid(
+    poles: Vec<f64>,
+    weights: Vec<f64>,
+    degree: usize,
+    knots: Vec<f64>,
+    mults: Vec<usize>,
+    total: f64,
+    num: Option<usize>,
+    dist: Option<f64>,
+    even: bool,
+) -> PyResult<Vec<f64>> {
+    if poles.len() % 3 != 0 {
+        return Err(PyValueError::new_err("poles must be flat xyz triples"));
+    }
+    let grid: Vec<[f64; 3]> = poles
+        .chunks_exact(3)
+        .map(|c| [c[0], c[1], c[2]])
+        .collect();
+    let weights = if weights.is_empty() { None } else { Some(weights) };
+    let curve = geometrykit_core::curve::Curve::new(
+        grid, weights, degree, &knots, &mults,
+    );
+    geometrykit_core::curve::arclength_divide(&curve, total, num, dist, even)
+        .map_err(PyValueError::new_err)
+}
+
 /// Section chains, flat: `[n_offsets, n_chains_off0, (n_pts, uv*2,
 /// xyz*3)..., n_chains_off1, ...]`. Counts ride as exact f64 integers.
 #[pyfunction]
@@ -305,6 +336,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(banded_solve_grid, m)?)?;
     m.add_function(wrap_pyfunction!(interpolate_grid, m)?)?;
     m.add_function(wrap_pyfunction!(tessellate_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(curve_divide_grid, m)?)?;
     m.add_function(wrap_pyfunction!(section_levels_grid, m)?)?;
     Ok(())
 }

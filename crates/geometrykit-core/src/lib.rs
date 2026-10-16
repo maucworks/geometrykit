@@ -18,6 +18,7 @@ pub mod interp;
 pub mod linalg;
 pub mod section;
 pub mod tessellate;
+pub mod curve;
 
 /// Kernels crate version, kept in step with the distribution.
 pub const VERSION: &str = "0.1.0";

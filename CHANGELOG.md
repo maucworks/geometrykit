@@ -4,6 +4,26 @@
 
 # Unreleased — adaptive kernel tessellation
 
+- **Panel metrics promoted** (`geometry.panel`: `FieldReport`,
+  `cells_report`, `field_report`): the Eigensatz buildability metrics
+  move here from ifckit (pure stdlib, no twin); exported from
+  `geometrykit.geometry` with tests. The old package comment claiming
+  panel_report stays in ifckit is revised with it.
+
+- **Kernel arc-length division** (`curve_np.arclength_divide`,
+  `TestDivideArcLength`): the OCC-free fallback of `Curve.divide`
+  sampled uniformly in parameter space (measured 2.7x gap spread);
+  the chord-table inversion holds arc-length uniformity within a
+  few percent. The mirror function is directly testable and the
+  port target; `divide()` itself keeps taking the OCC path when
+  available (pinned with path-agnostic bounds).
+- **Phase 2 port 8: arc-length division in core** (`curve::Curve`
+  point eval + `arclength_divide`, `curve_divide_grid` batch
+  marshalling, `dispatch.arclength_divide`): bit-parity proven
+  mirror vs. extension on wiggle/line/kinked curves (one 1-ulp
+  association fix along the way: `(lo-1+frac)/n`, not split).
+  Suites: plain 714/0, oracle 714/0.
+
 - **Adaptive kernel tessellation** (`runtimes/_npu/tessellate_np`,
   `test_tessellate.py`): OCC-free surface meshing — a restricted
   quadtree over the parameter domain (dyadic lattice stations, one

@@ -80,6 +80,35 @@ def tessellate(surf, deflection: float = 0.01, angle_tol: float = 0.5,
     return verts, normals, tris, uvs
 
 
+def arclength_divide(curve, total: float, num=None, dist=None, even: bool = True):
+    """Mirror `curve_np.arclength_divide` under the active engine.
+
+    Returns ascending normalized parameters (first 0.0, last 1.0),
+    bit-identical across engines by harness.
+    """
+    from geometrykit.runtimes._npu import curve_np
+
+    def _sample(t: float):
+        p = curve.point_at(t)
+        return (p.x, p.y, p.z)
+
+    accel = _rust()
+    if accel is None:
+        return curve_np.arclength_divide(_sample, total, num=num, dist=dist, even=even)
+    from geometrykit import _rust as _ext
+
+    flat = []
+    for p in curve.points:
+        flat.extend((p.x, p.y, p.z))
+    weights = (
+        list(curve._weights) if curve._weights is not None else []
+    )
+    return _ext.curve_divide_grid(
+        flat, weights, int(curve.degree), list(curve.knots),
+        list(curve.multiplicities), float(total), num, dist, bool(even),
+    )
+
+
 def plane_section_chains(surf, origin, normal, offsets, nu: int, nv: int):
     """Mirror `section_np.section_levels` under the active engine.
 

@@ -451,12 +451,16 @@ class Curve:
         except ImportError:
             pass
 
-        n = num if num is not None else int(total / step) + 1
+        # Kernel arc-length division (no OCC), engine-dispatched
+        # (mirror or the `_rust` accelerator, bit-identical).
         from geometrykit.geometry.path import PathPoint
+        from geometrykit.runtimes import dispatch
 
         return [
             PathPoint(t=t, point=self.point_at(t), tangent=self.tangent_at(t))
-            for t in (i / (n - 1) for i in range(n))
+            for t in dispatch.arclength_divide(
+                self, total, num=num, dist=dist, even=even
+            )
         ]
 
     @property

@@ -349,3 +349,83 @@ def group_and_orient(curves: Sequence, tol: float = 1e-6) -> list:
 
     groups.append(oriented)
     return groups
+
+
+def arclength_divide(
+    point_at,
+    total: float,
+    num: "int | None" = None,
+    dist: "float | None" = None,
+    even: bool = True,
+) -> list:
+    """Kernel arc-length division: normalized parameters ``∈ [0, 1]``.
+
+    A dense chord table over ``point_at`` is inverted per target
+    distance (binary search + linear interpolation). Arc-length
+    uniformity holds within a few percent on fair curves (the old
+    parameter-uniform fallback measured 2.7x gap spread on a Hermite
+    wiggle); straight chords between outputs vary more where the
+    curve bends, which is geometric, not error.
+
+    Args:
+        point_at: callable ``t → xyz`` (t in [0, 1]).
+        total:    curve length in the same units as ``dist``.
+        num:      point count (endpoints included).
+        dist:     target spacing; ``even`` distributes evenly with the
+                  endpoints included, otherwise fixed steps from the
+                  start plus the exact endpoint.
+        even:     spacing rule for *dist* (see above).
+
+    Returns:
+        Ascending parameter list (first 0.0, last 1.0).
+    """
+    import math
+
+    if total < _EPS:
+        raise ValueError("Cannot divide a zero-length curve")
+    table_n = max(64, 8 * (num if num is not None else 16))
+    samples = [point_at(i / table_n) for i in range(table_n + 1)]
+    cumulative = [0.0]
+    for a, b in zip(samples, samples[1:]):
+        cumulative.append(
+            cumulative[-1]
+            + math.sqrt(
+                (b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2
+            )
+        )
+    table_total = cumulative[-1]
+    if table_total < _EPS:
+        raise ValueError("Cannot divide a zero-length curve")
+    if num is not None:
+        targets = [table_total * k / (num - 1) for k in range(num)]
+    elif even:
+        segs = max(1, math.ceil(table_total / dist))
+        targets = [table_total * k / segs for k in range(segs + 1)]
+    else:
+        targets = []
+        d = 0.0
+        while d < table_total:
+            targets.append(d)
+            d += dist
+        targets.append(table_total)
+
+    out = []
+    for target in targets:
+        lo, hi = 0, table_n
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if cumulative[mid] < target:
+                lo = mid + 1
+            else:
+                hi = mid
+        if lo <= 0:
+            out.append(0.0)
+        elif lo > table_n:
+            out.append(1.0)
+        else:
+            span = cumulative[lo] - cumulative[lo - 1]
+            if span <= 0.0:
+                out.append(lo / table_n)
+            else:
+                out.append((lo - 1 + (target - cumulative[lo - 1]) / span) / table_n)
+    return out

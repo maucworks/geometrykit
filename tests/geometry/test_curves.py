@@ -3,6 +3,7 @@
 import math
 
 import pytest
+from geometrykit import contract, engine
 from geometrykit.geometry import Arc, Line, Path, Plane, Polyline, Vec
 
 # ---------------------------------------------------------------------------
@@ -752,3 +753,183 @@ class TestDenseInterpolationExactness:
                 worst, abs(q.x - p.x) + abs(q.y - p.y) + abs(q.z - p.z)
             )
         assert worst < 1e-9, worst
+
+
+class TestDivideArcLength:
+    """Kernel arc-length division (mirror function, engine-independent).
+
+    The old parameter-uniform fallback measured 2.7x gap spread on a
+    Hermite wiggle; the chord-table inversion below holds 1.01x. The
+    method-level divide() takes the OCC path when pythonocc is present
+    (endpoints within 1e-3, uniformity within 1.3x), so the tight
+    bounds live here, against the kernel directly.
+    """
+
+    @staticmethod
+    def _wiggle():
+        from geometrykit.geometry import Curve
+
+        return Curve.from_tangents(
+            start=Vec(0, 0, 0), tan_start=Vec(1, 0, 0),
+            end=Vec(4, 1, 0), tan_end=Vec(0, 1, 0), scale=3.0,
+        )
+
+    @staticmethod
+    def _sample(curve, n=200):
+        return [
+            (p.x, p.y, p.z)
+            for p in (curve.point_at(i / (n - 1)) for i in range(n))
+        ]
+
+    @staticmethod
+    def _gaps(pts):
+        import math
+
+        out = []
+        for a, b in zip(pts, pts[1:]):
+            out.append(math.sqrt(
+                (b.point.x - a.point.x) ** 2
+                + (b.point.y - a.point.y) ** 2
+                + (b.point.z - a.point.z) ** 2
+            ))
+        return out
+
+    def _kernel(self, curve, **kwargs):
+        from geometrykit.runtimes._npu import curve_np
+
+        pts = self._sample(curve)
+        total = sum(
+            abs(b[0] - a[0]) + abs(b[1] - a[1]) + abs(b[2] - a[2])
+            for a, b in zip(pts, pts[1:])
+        )
+        params = curve_np.arclength_divide(
+            lambda t: (
+                curve.point_at(t).x, curve.point_at(t).y, curve.point_at(t).z,
+            ),
+            total,
+            **kwargs,
+        )
+        from geometrykit.geometry.path import PathPoint
+
+        return [
+            PathPoint(t=t, point=curve.point_at(t), tangent=curve.tangent_at(t))
+            for t in params
+        ]
+
+    def test_count_and_endpoints_exact(self):
+        pts = self._kernel(self._wiggle(), num=9)
+        assert len(pts) == 9
+        assert pts[0].t == 0.0
+        assert pts[-1].t == 1.0
+
+    def test_spacing_uniform(self):
+        import math
+
+        curve = self._wiggle()
+        pts = self._kernel(curve, num=9)
+        # arc length per interval (dense chord sum between outputs)
+        arcs = []
+        for a, b in zip(pts, pts[1:]):
+            steps = [
+                curve.point_at(a.t + (b.t - a.t) * k / 40) for k in range(41)
+            ]
+            arcs.append(sum(
+                math.sqrt(
+                    (q.x - p.x) ** 2 + (q.y - p.y) ** 2 + (q.z - p.z) ** 2
+                )
+                for p, q in zip(steps, steps[1:])
+            ))
+        assert max(arcs) / min(arcs) < 1.05, arcs
+
+    def test_tangents_unit(self):
+        for p in self._kernel(self._wiggle(), num=9):
+            assert abs(abs(p.tangent) - 1.0) < 1e-9
+
+    def test_dist_even_covers_and_ends(self):
+        pts = self._kernel(self._wiggle(), dist=0.5)
+        assert pts[0].t == 0.0
+        assert pts[-1].t == 1.0
+        gaps = self._gaps(pts)
+        assert max(gaps) <= 0.5 + 1e-9
+        assert max(gaps) / min(gaps) < 1.1
+
+    def test_dist_uneven_ends_at_end(self):
+        pts = self._kernel(self._wiggle(), dist=0.5, even=False)
+        assert pts[-1].t == 1.0
+        assert len(pts) >= 2
+
+    def test_straight_line_exact(self):
+        from geometrykit.geometry import Curve
+
+        line = Curve.from_tangents(
+            start=Vec(0, 0, 0), tan_start=Vec(1, 0, 0),
+            end=Vec(3, 0, 0), tan_end=Vec(1, 0, 0), scale=1.0,
+        )
+        gaps = self._gaps(self._kernel(line, num=5))
+        for g in gaps:
+            assert abs(g - 0.75) < 1e-9, gaps
+
+    def test_method_agrees_on_both_paths(self):
+        # divide() itself takes the OCC path when available: count is
+        # exact and endpoints land within 1e-3 on either path.
+        pts = self._wiggle().divide(num=9)
+        assert len(pts) == 9
+        assert abs(pts[0].t - 0.0) < 1e-3
+        assert abs(pts[-1].t - 1.0) < 1e-3
+        gaps = self._gaps(pts)
+        assert max(gaps) / min(gaps) < 1.3
+
+
+@pytest.mark.rust
+@pytest.mark.skipif(not engine.has_rust(), reason="requires geometrykit._rust")
+class TestDivideParity:
+    """Port 8: arc-length division, mirror vs. extension, bit-for-bit."""
+
+    @staticmethod
+    def _curves():
+        from geometrykit.geometry import Curve
+
+        wiggle = Curve.from_tangents(
+            start=Vec(0, 0, 0), tan_start=Vec(1, 0, 0),
+            end=Vec(4, 1, 0), tan_end=Vec(0, 1, 0), scale=3.0,
+        )
+        line = Curve.from_tangents(
+            start=Vec(0, 0, 0), tan_start=Vec(1, 0, 0),
+            end=Vec(3, 0, 0), tan_end=Vec(1, 0, 0), scale=1.0,
+        )
+        kinked = Curve.from_points(
+            [Vec(0, 0, 0), Vec(1, 1, 0), Vec(2, 0, 0), Vec(3, 1, 0)]
+        )
+        return [wiggle, line, kinked]
+
+    @staticmethod
+    def _total(curve):
+        pts = [
+            curve.point_at(i / 199)
+            for i in range(200)
+        ]
+        return sum(
+            abs(b.x - a.x) + abs(b.y - a.y) + abs(b.z - a.z)
+            for a, b in zip(pts, pts[1:])
+        )
+
+    def test_params_bit_identical(self):
+        from geometrykit import _rust
+        from geometrykit.runtimes import dispatch
+        from geometrykit.runtimes._npu import curve_np
+
+        for curve in self._curves():
+            total = self._total(curve)
+
+            def _sample(t, _c=curve):
+                p = _c.point_at(t)
+                return (p.x, p.y, p.z)
+
+            for kwargs in ({"num": 9}, {"dist": 0.5}, {"dist": 0.5, "even": False}):
+                mine = curve_np.arclength_divide(_sample, total, **kwargs)
+                theirs = dispatch.arclength_divide(curve, total, **kwargs)
+                assert len(mine) == len(theirs)
+                for va, vb in zip(mine, theirs):
+                    assert contract.float_to_hex(va) == contract.float_to_hex(vb), (
+                        kwargs, va, vb,
+                    )
