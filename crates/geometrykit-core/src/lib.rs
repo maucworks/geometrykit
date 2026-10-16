@@ -21,7 +21,7 @@ pub mod tessellate;
 pub mod curve;
 
 /// Kernels crate version, kept in step with the distribution.
-pub const VERSION: &str = "0.1.0";
+pub const VERSION: &str = "0.2.0";
 
 /// IEEE-754 bit pattern of `x` in the contract's canonical form.
 ///

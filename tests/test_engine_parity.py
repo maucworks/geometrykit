@@ -112,7 +112,7 @@ class TestAcceleratorParity:
     def test_core_version_stamp(self):
         from geometrykit import _rust
 
-        assert _rust.core_version() == "geometrykit-core 0.1.0"
+        assert _rust.core_version() == "geometrykit-core 0.2.0"
 
     def test_bits_hex_agrees_with_contract(self):
         from geometrykit import _rust
