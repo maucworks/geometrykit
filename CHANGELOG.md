@@ -1,3 +1,7 @@
+# v0.5.1 — 2026-10-16: the rewritten README reaches PyPI (the 0.4.0/
+# 0.5.0 pages still described the 0.0.x name-claim placeholder). No
+# code changes.
+
 # v0.5.0 — 2026-10-16: the precompiled wheel matrix (pip installs the
 # rust engine per platform; abi3-py39 covers Rhino 8's CPython 3.9.11)
 # plus the corrected binary-wheel metadata (Root-Is-Purelib=false, the
