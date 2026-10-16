@@ -4,6 +4,14 @@
 
 # Unreleased — adaptive kernel tessellation
 
+- **Kernel arc-length division** (`curve_np.arclength_divide`,
+  `TestDivideArcLength`): the OCC-free fallback of `Curve.divide`
+  sampled uniformly in parameter space (measured 2.7x gap spread);
+  the chord-table inversion holds arc-length uniformity within a
+  few percent. The mirror function is directly testable and the
+  port target; `divide()` itself keeps taking the OCC path when
+  available (pinned with path-agnostic bounds).
+
 - **Adaptive kernel tessellation** (`runtimes/_npu/tessellate_np`,
   `test_tessellate.py`): OCC-free surface meshing — a restricted
   quadtree over the parameter domain (dyadic lattice stations, one
