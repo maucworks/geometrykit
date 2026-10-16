@@ -237,6 +237,24 @@ fn interpolate_grid(
     Ok((flat, out.knots, out.mults))
 }
 
+/// Adaptive tessellation grid: flat `[verts xyz][normals xyz][tris idx]
+/// [uvs uv]`, counts ride separately (exact integers, no float packing).
+#[pyfunction]
+fn tessellate_grid(
+    surface: &Bound<'_, PyAny>,
+    deflection: f64,
+    angle_tol: f64,
+    max_depth: usize,
+    base_level: usize,
+) -> PyResult<(Vec<f64>, Vec<f64>, Vec<usize>, Vec<f64>)> {
+    let s = _payload(surface)?;
+    let mesh = geometrykit_core::tessellate::adaptive_mesh(
+        &s, deflection, angle_tol, max_depth as u32, base_level as u32,
+    )
+    .map_err(PyValueError::new_err)?;
+    Ok((mesh.verts, mesh.normals, mesh.tris, mesh.uvs))
+}
+
 /// Section chains, flat: `[n_offsets, n_chains_off0, (n_pts, uv*2,
 /// xyz*3)..., n_chains_off1, ...]`. Counts ride as exact f64 integers.
 #[pyfunction]
@@ -286,6 +304,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(banded_cholesky_grid, m)?)?;
     m.add_function(wrap_pyfunction!(banded_solve_grid, m)?)?;
     m.add_function(wrap_pyfunction!(interpolate_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(tessellate_grid, m)?)?;
     m.add_function(wrap_pyfunction!(section_levels_grid, m)?)?;
     Ok(())
 }

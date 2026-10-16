@@ -13,7 +13,7 @@ import math
 from collections import Counter
 
 import pytest
-from geometrykit import contract
+from geometrykit import contract, engine
 from geometrykit.geometry import Surface
 from geometrykit.geometry.primitives import Vec
 from geometrykit.runtimes._npu import tessellate_np
@@ -132,6 +132,39 @@ class TestGuards:
             tessellate_np.adaptive_mesh(surf, max_depth=1, base_level=2)
 
 
+class TestMeshDictWiring:
+    def test_adaptive_dict_shape(self):
+        surf = _saddle()
+        d = surf.to_mesh_dict(label="saddle", method="adaptive")
+        assert d["primitive"] == "triangles"
+        assert d["label"] == "saddle"
+        n = len(d["positions"]) // 3
+        assert all(0 <= i < n for i in d["indices"])
+        assert len(d["indices"]) % 3 == 0
+
+    def test_unknown_method_raises(self):
+        with pytest.raises(ValueError, match="unknown mesh method"):
+            _saddle().to_mesh_dict(method="bogus")
+
+    def test_preview_carries_method(self):
+        d = _saddle().preview(label="s", method="adaptive")
+        assert d["__type__"] == "mesh"
+        assert d["primitive"] == "triangles"
+        assert d["positions"]
+
+    def test_default_still_occ(self):
+        # default path unchanged: without pythonocc it raises, it does
+        # not silently fall back to the kernel
+        try:
+            import OCC  # noqa: F401
+        except ImportError:
+            with pytest.raises(ImportError):
+                _saddle().to_mesh_dict()
+            return
+        d = _saddle().to_mesh_dict()
+        assert d["primitive"] == "triangles"
+
+
 class TestDeterminism:
     def test_two_runs_identical_signatures(self):
         surf = _saddle()
@@ -144,3 +177,53 @@ class TestDeterminism:
             assert contract.signature({"v": [float(v) for v in a]}) == contract.signature(
                 {"v": [float(v) for v in b]}
             )
+
+
+@pytest.mark.rust
+@pytest.mark.skipif(not engine.has_rust(), reason="requires geometrykit._rust")
+class TestTessellationParity:
+    """Port 7: adaptive tessellation, mirror vs. extension, bit-for-bit."""
+
+    @staticmethod
+    def _surfaces():
+        import math
+
+        surf = _saddle()
+        weights = [
+            [1.0 + 0.5 * math.sin(1.3 * i + 0.7 * j + 0.2) for j in range(4)]
+            for i in range(4)
+        ]
+        rational = Surface(
+            surf.control_points,
+            surf.uknots, surf.vknots, surf.umults, surf.vmults,
+            surf.udegree, surf.vdegree,
+            weights,
+        )
+        return [("bicubic", surf), ("rational", rational)]
+
+    def test_grids_bit_identical(self):
+        from geometrykit import _rust
+
+        for _tag, surf in self._surfaces():
+            mine = tessellate_np.adaptive_mesh(surf, deflection=0.005)
+            verts, normals, flat_tris, uvs = _rust.tessellate_grid(
+                surf, 0.005, 0.5, 8, 2
+            )
+            got_tris = [
+                (flat_tris[k], flat_tris[k + 1], flat_tris[k + 2])
+                for k in range(0, len(flat_tris), 3)
+            ]
+            assert [tuple(t) for t in got_tris] == [tuple(t) for t in mine[2]]
+            for va, vb in zip(verts + normals + uvs, mine[0] + mine[1] + mine[3]):
+                assert contract.float_to_hex(va) == contract.float_to_hex(vb)
+
+    def test_dispatch_matches_mirror(self):
+        from geometrykit.runtimes import dispatch
+
+        for _tag, surf in self._surfaces():
+            mine = tessellate_np.adaptive_mesh(surf, deflection=0.005)
+            routed = dispatch.tessellate(surf, deflection=0.005)
+            assert routed[2] == mine[2]
+            for va, vb in zip(routed[0] + routed[1] + routed[3],
+                              mine[0] + mine[1] + mine[3]):
+                assert contract.float_to_hex(va) == contract.float_to_hex(vb)
