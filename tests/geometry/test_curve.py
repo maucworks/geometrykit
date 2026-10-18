@@ -346,3 +346,103 @@ class TestToBiarcs:
         c = _linear_curve()
         p = c.to_path(tolerance=0.01, min_arc_angle=0.001)
         assert len(p.segments) > 0
+
+
+# ---------------------------------------------------------------------------
+# divide (arc-length)
+# ---------------------------------------------------------------------------
+
+
+class TestDivide:
+    def test_divide_num_endpoints_included(self):
+        c = _linear_curve()
+        pts = c.divide(num=5)
+        assert len(pts) == 5
+        assert abs(pts[0].t - 0.0) < TOL
+        assert abs(pts[-1].t - 1.0) < TOL
+
+    def test_divide_num_points_on_curve(self):
+        c = _linear_curve()
+        pts = c.divide(num=5)
+        for p in pts:
+            expected = 10.0 * p.t
+            assert abs(p.point.x - expected) < 0.1
+            assert abs(p.point.y) < TOL
+
+    def test_divide_num_raises_lt_2(self):
+        with pytest.raises(ValueError, match="num"):
+            _linear_curve().divide(num=1)
+
+    def test_divide_neither_raises(self):
+        with pytest.raises(ValueError, match="Exactly one"):
+            _linear_curve().divide()
+
+    def test_divide_both_raises(self):
+        with pytest.raises(ValueError, match="Exactly one"):
+            _linear_curve().divide(num=3, dist=1.0)
+
+    def test_divide_dist_even_spacing(self):
+        c = _linear_curve()
+        pts = c.divide(dist=3.0, even=True)
+        # 10/3 → ceil = 4 segments → 5 points
+        assert len(pts) == 5
+        for p in pts:
+            assert 0.0 <= p.t <= 1.0
+
+    def test_divide_dist_not_even_fixed_step(self):
+        c = _linear_curve()
+        pts = c.divide(dist=3.0, even=False)
+        # 3, 6, 9, then endpoint → 5 points (last step shorter)
+        assert len(pts) == 5
+        assert abs(pts[-1].t - 1.0) < TOL
+
+    def test_divide_dist_zero_raises(self):
+        with pytest.raises(ValueError, match="dist"):
+            _linear_curve().divide(dist=0.0)
+
+    def test_divide_dist_negative_raises(self):
+        with pytest.raises(ValueError, match="dist"):
+            _linear_curve().divide(dist=-1.0)
+
+    def test_divide_zero_length_raises(self):
+        c = Curve(
+            control_points=[Vec(1, 1, 1), Vec(1, 1, 1)],
+            knots=[0.0, 1.0],
+            multiplicities=[2, 2],
+            degree=1,
+        )
+        with pytest.raises(ValueError, match="zero-length"):
+            c.divide(num=3)
+
+    def test_divide_returns_pathpoint(self):
+        from geometrykit.geometry.path import PathPoint
+
+        pts = _linear_curve().divide(num=3)
+        for p in pts:
+            assert isinstance(p, PathPoint)
+            assert hasattr(p, "t")
+            assert hasattr(p, "point")
+            assert hasattr(p, "tangent")
+
+    def test_divide_tangent_unit(self):
+        pts = _bezier_curve().divide(num=5)
+        for p in pts:
+            assert abs(p.tangent.length() - 1.0) < 0.01
+
+    def test_divide_ascending_t(self):
+        pts = _bezier_curve().divide(num=10)
+        for a, b in zip(pts, pts[1:]):
+            assert a.t < b.t
+
+    def test_divide_num_large_count(self):
+        c = _bezier_curve()
+        pts = c.divide(num=50)
+        assert len(pts) == 50
+        assert abs(pts[0].t) < TOL
+        assert abs(pts[-1].t - 1.0) < TOL
+
+    def test_divide_dist_small_gives_many_points(self):
+        c = _linear_curve()
+        pts = c.divide(dist=0.5, even=True)
+        # 10 / 0.5 = 20 segments → 21 points
+        assert len(pts) == 21
