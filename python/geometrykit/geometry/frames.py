@@ -1,9 +1,8 @@
-# This file was generated with the assistance of an AI coding tool.
-# Ported from ifckit/ifckit/geometry/frames.py (LGPL-3.0-or-later heritage;
+# Promoted from ifckit/ifckit/geometry/frames.py (LGPL-3.0-or-later heritage;
 # ifckit is authored by the same copyright holder as geometrykit).
 """
-ifckit.geometry.frames
-======================
+geometrykit.geometry.frames
+===========================
 
 Transport frames, reference frames, and miter-scale computation for
 sweeping profiles along 3D spine paths.
