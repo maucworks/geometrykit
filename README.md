@@ -7,6 +7,13 @@ fills with G1/G2 continuity options, plane × surface sections with
 pcurve tracks, and STEP/OBJ/STL writers. No OCCT, no compiled
 toolchain required to install.
 
+![Tests](https://github.com/maucworks/geometrykit/actions/workflows/tests.yml/badge.svg)
+![PyPI](https://img.shields.io/pypi/v/geometrykit)
+[![Docs](https://img.shields.io/badge/docs-pdoc-blue)](https://maucworks.github.io/geometrykit/)
+
+API reference: **[maucworks.github.io/geometrykit](https://maucworks.github.io/geometrykit/)**
+(pdoc, generated from the docstrings)
+
 ## Install
 
 ```bash
