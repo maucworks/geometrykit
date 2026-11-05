@@ -40,11 +40,17 @@ dev = [
     "pytest>=7,<10",
     "pytest-cov>=7,<8",
     "hypothesis>=6,<8",
+    "pdoc>=15,<17; python_version >= '3.10'",
 ]
 
 [project.urls]
 Homepage = "https://github.com/maucworks/geometrykit"
 Changelog = "https://github.com/maucworks/geometrykit/blob/master/CHANGELOG.md"
+Documentation = "https://maucworks.github.io/geometrykit/"
+
+[tool.pdoc]
+search = true
+template_directory = "docs/pdoc_templates"
 
 [tool.setuptools.packages.find]
 where   = ["python"]
