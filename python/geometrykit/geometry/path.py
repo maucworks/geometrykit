@@ -994,18 +994,29 @@ class Path:
             if isinstance(seg, Arc):  # safe: Arc never reloaded independently
                 return seg.normal
 
-        # For Lines only: use first segment direction and derive a perpendicular.
-        # isinstance is safe here — Line is a module-internal primitive,
-        # not a reloadable user class.
+        # For Lines only: normal from the first two non-parallel segments
+        # (the true path-plane normal). Collinear paths have no unique
+        # normal: fall back to an arbitrary perpendicular, against which
+        # a single straight line frames fine.
         if len(self._segments) > 0 and isinstance(
             self._segments[0], Line
         ):  # safe: Line never reloaded
-            first_dir = self._segments[0].direction.normalized()
-            # Return an arbitrary perpendicular to the line direction
-            if abs(first_dir.z) < 0.9:
-                return (Vec(0, 0, 1) ** first_dir).normalized()
-            else:
-                return (Vec(0, 1, 0) ** first_dir).normalized()
+            dirs = []
+            for seg in self._segments:
+                if isinstance(seg, Line):  # safe: Line never reloaded
+                    try:
+                        dirs.append(seg.direction.normalized())
+                    except ValueError:
+                        continue  # degenerate segment: no direction
+            if dirs:
+                ref = dirs[0]
+                for d in dirs[1:]:
+                    n = ref**d
+                    if n.length() > 1e-9:
+                        return n.normalized()
+                if abs(ref.z) < 0.9:
+                    return (Vec(0, 0, 1) ** ref).normalized()
+                return (Vec(0, 1, 0) ** ref).normalized()
 
         return None
 
@@ -1032,7 +1043,11 @@ class Path:
         # Ensure x_axis is perfectly orthogonal to normal (floating point safety).
         x_axis = x_axis - normal * (normal @ x_axis)
         x_axis = x_axis.normalized()
-        return Plane(origin, x_axis, normal)
+        # y_axis completes the right-handed frame so the plane normal
+        # (z_axis = x_axis x y_axis) equals the path normal. Passing
+        # `normal` as y_axis here would stand the plane edge-on to the path.
+        y_axis = normal**x_axis
+        return Plane(origin, x_axis, y_axis)
 
     @classmethod
     def assemble(

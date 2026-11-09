@@ -49,6 +49,32 @@ class TestFromPts:
         assert p._plane is pl
 
 
+class TestPlaneProperty:
+    def test_mixed_path_plane_matches_normal(self):
+        p = Path.from_pts([Vec(0, 0, 0), Vec(0, 0, 3), Vec(1, 0, 3), Vec(0.5, 0, 0)])
+        p.fillet([1, 2], 0.2)
+        assert p.is_planar
+        n = p.normal
+        pl = p.plane
+        assert abs(abs(pl.z_axis @ n) - 1.0) < 1e-9
+        assert abs(pl.x_axis @ n) < 1e-9
+        assert abs(pl.y_axis @ n) < 1e-9
+
+    def test_lines_only_true_normal(self):
+        p = Path.from_pts([Vec(0, 0, 0), Vec(0, 0, 3), Vec(1, 0, 3)])
+        n = p.normal
+        assert n is not None
+        assert abs(abs(n @ Vec(0, 1, 0)) - 1.0) < 1e-9
+        pl = p.plane
+        assert abs(abs(pl.z_axis @ Vec(0, 1, 0)) - 1.0) < 1e-9
+
+    def test_single_line_keeps_arbitrary_perp(self):
+        p = Path.from_pts([Vec(0, 0, 0), Vec(0, 0, 3)])
+        n = p.normal
+        assert n is not None
+        assert abs(n @ Vec(0, 0, 1)) < 1e-9
+
+
 class TestRect:
     def test_rect_is_closed(self):
         pl = Plane.world_xy()
