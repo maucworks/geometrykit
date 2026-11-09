@@ -1,3 +1,10 @@
+# v0.6.1 — 2026-11-09: Path fix release — `Path.plane` now frames the
+# path plane correctly (z-axis carries the path normal instead of the
+# normal standing in as y_axis, which stood the plane edge-on), and
+# `Path.normal` for line-only paths reads the true path-plane normal
+# from the first two non-parallel segments. Frame orientation changes:
+# consumer packages should re-verify frame-dependent code paths.
+
 # v0.6.0 — 2026-10-16: tessellation, arc-length division, panel
 # metrics (Python), plus their Rust-core ports (core 0.2.0).
 # The wheel matrix carries the accelerator per platform (abi3-py39,
